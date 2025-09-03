@@ -1,0 +1,20 @@
+{
+    "name": "sglang-cpu",
+    "build": {
+        "dockerfile": "Dockerfile_cpu"
+    },
+    "remoteUser": "devuser",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "charliermarsh.ruff",
+                "rust-lang.rust-analyzer",
+                "tamasfe.even-better-toml"
+            ]
+        }
+    },
+    "forwardPorts": [],
+    "workspaceMount": "source=${localWorkspaceFolder},target=/sgl-workspace/sglang,type=bind",
+    "workspaceFolder": "/sgl-workspace/sglang"
+}
