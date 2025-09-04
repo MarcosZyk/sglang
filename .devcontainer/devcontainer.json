@@ -2,7 +2,6 @@
     "name": "sglang-cpu",
     "build": {
         "dockerfile": "Dockerfile",
-        "options": ["--no-cache"]
     },
     "remoteUser": "devuser",
     "customizations": {
