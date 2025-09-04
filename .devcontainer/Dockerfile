@@ -1,4 +1,4 @@
-FROM lmsysorg/sglang:dev
+FROM zyk/sglang-cpu:dev
 
 # Create non-root user with specified UID and GID
 # NOTE: Replace with your own UID and GID. This is a workaround from https://github.com/microsoft/vscode-remote-release/issues/49#issuecomment-489060908.
@@ -11,10 +11,46 @@ RUN groupadd -g $HOST_GID devuser && \
 RUN apt-get update && apt-get install -y sudo && \
     echo "devuser ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/devuser && \
     rm -rf /var/lib/apt/lists/* && \
-    apt-get clean
+    apt-get clean zsh
 
-# Set up oh-my-zsh for devuser
-RUN cp -r /root/.oh-my-zsh /home/devuser/.oh-my-zsh && \
+# Install oh-my-zsh and plugins
+RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended \
+    && git clone https://github.com/zsh-users/zsh-autosuggestions ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-autosuggestions \
+    && git clone https://github.com/zsh-users/zsh-syntax-highlighting.git ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting
+
+# Configure zsh
+COPY --chown=root:root <<-"EOF" /root/.zshrc
+export ZSH="/root/.oh-my-zsh"
+
+# Theme
+ZSH_THEME="robbyrussell"
+
+# Plugins
+plugins=(
+    git
+    z
+    zsh-autosuggestions
+    zsh-syntax-highlighting
+)
+
+source $ZSH/oh-my-zsh.sh
+
+# Aliases
+alias ll='ls -alF'
+alias la='ls -A'
+alias l='ls -CF'
+alias vi='vim'
+
+# Enhanced history
+HISTSIZE=10000
+SAVEHIST=10000
+setopt HIST_IGNORE_ALL_DUPS
+setopt HIST_FIND_NO_DUPS
+setopt INC_APPEND_HISTORY
+EOF
+
+#Set up oh-my-zsh for devuser
+RUN #cp -r /root/.oh-my-zsh /home/devuser/.oh-my-zsh && \
     cp /root/.zshrc /home/devuser/.zshrc && \
     cp /root/.vimrc /home/devuser/.vimrc && \
     cp /root/.tmux.conf /home/devuser/.tmux.conf && \
