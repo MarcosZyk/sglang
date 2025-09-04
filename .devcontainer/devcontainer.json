@@ -1,7 +1,7 @@
 {
     "name": "sglang-cpu",
     "build": {
-        "dockerfile": "Dockerfile_cpu"
+        "dockerfile": "Dockerfile"
     },
     "remoteUser": "devuser",
     "customizations": {
