@@ -8,10 +8,13 @@ RUN groupadd -g $HOST_GID devuser && \
     useradd -m -u $HOST_UID -g $HOST_GID -s /bin/zsh devuser
 
 # Give devuser sudo access
-RUN apt-get update && apt-get install -y sudo && \
+RUN apt-get update && apt-get install -y \
+    sudo \
+    zsh \
+    && \
     echo "devuser ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/devuser && \
     rm -rf /var/lib/apt/lists/* && \
-    apt-get clean zsh
+    apt-get clean
 
 # Install oh-my-zsh and plugins
 RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended \
