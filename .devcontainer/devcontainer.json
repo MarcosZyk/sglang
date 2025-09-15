@@ -17,5 +17,5 @@
     "forwardPorts": [],
     "workspaceMount": "source=${localWorkspaceFolder},target=/sgl-workspace/sglang,type=bind",
     "workspaceFolder": "/sgl-workspace/sglang",
-    "runArgs": ["--ipc=host", "-v", "/dev/shm:/dev/shm", "--memory=128g", "--cpus=64"]
+    "runArgs": ["--ipc=host", "-v", "/dev/shm:/dev/shm", "--memory=64g", "--cpus=32"]
 }
