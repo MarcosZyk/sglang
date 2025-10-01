@@ -1338,8 +1338,15 @@ class DeepseekV2AttentionMLA(nn.Module):
             if attn_output.shape[0] == 1:
                 # decoding
 
-                # not sure all-reduce or all-gather
-                attn_logits = tensor_model_parallel_all_reduce(attn_logits)
+                attn_logits = attn_logits[:, :, :1, :]
+                flat_logits = attn_logits.flatten()
+                gathered_logits = tensor_model_parallel_all_gather(flat_logits).view(
+                    -1,
+                    attn_logits.shape[1],
+                    1,
+                    attn_logits.shape[3],
+                )
+                attn_logits = torch.cat(gathered_logits.split(attn_logits.shape[0], dim=0), dim=2)
 
                 attn_output = torch.empty(
                     (attn_logits.shape[0], self.num_local_heads, self.kv_lora_rank),
