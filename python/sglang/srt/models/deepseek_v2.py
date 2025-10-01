@@ -34,6 +34,7 @@ from sglang.srt.distributed import (
     get_tensor_model_parallel_world_size,
     parallel_state,
     tensor_model_parallel_all_reduce,
+    tensor_model_parallel_all_gather,
 )
 from sglang.srt.distributed.device_communicators.pynccl_allocator import (
     use_symmetric_memory,
@@ -775,7 +776,8 @@ class DeepseekV2AttentionMLA(nn.Module):
 
         self.num_heads = num_heads
         assert num_heads % attn_tp_size == 0
-        self.num_local_heads = num_heads // attn_tp_size
+        # self.num_local_heads = num_heads // attn_tp_size
+        self.num_local_heads = num_heads
         self.scaling = self.qk_head_dim**-0.5
         self.rope_theta = rope_theta
         self.max_position_embeddings = max_position_embeddings
@@ -817,15 +819,22 @@ class DeepseekV2AttentionMLA(nn.Module):
                 prefix=add_prefix("kv_a_proj_with_mqa", prefix),
             )
 
-        self.kv_b_proj = ColumnParallelLinear(
+        self.kv_b_proj = ReplicatedLinear(
             self.kv_lora_rank,
             self.num_heads * (self.qk_nope_head_dim + self.v_head_dim),
             bias=False,
             quant_config=quant_config,
             prefix=add_prefix("kv_b_proj", prefix),
-            tp_rank=attn_tp_rank,
-            tp_size=attn_tp_size,
         )
+        # self.kv_b_proj = ColumnParallelLinear(
+        #     self.kv_lora_rank,
+        #     self.num_heads * (self.qk_nope_head_dim + self.v_head_dim),
+        #     bias=False,
+        #     quant_config=quant_config,
+        #     prefix=add_prefix("kv_b_proj", prefix),
+        #     tp_rank=attn_tp_rank,
+        #     tp_size=attn_tp_size,
+        # )
         # O projection.
         self.o_proj = RowParallelLinear(
             self.num_heads * self.v_head_dim,
@@ -1095,28 +1104,32 @@ class DeepseekV2AttentionMLA(nn.Module):
 
         attn_forward_method = self.dispatch_attn_forward_method(forward_batch)
 
-        if attn_forward_method == AttnForwardMethod.MHA:
-            inner_state = self.forward_normal_prepare(
-                positions, hidden_states, forward_batch, zero_allocator
-            )
-        elif attn_forward_method == AttnForwardMethod.MHA_CHUNKED_KV:
-            inner_state = self.forward_normal_chunked_kv_prepare(
-                positions, hidden_states, forward_batch, zero_allocator
-            )
-        elif attn_forward_method == AttnForwardMethod.MLA:
-            inner_state = self.forward_absorb_prepare(
-                positions, hidden_states, forward_batch, zero_allocator
-            )
-        elif attn_forward_method == AttnForwardMethod.MLA_FUSED_ROPE:
-            inner_state = self.forward_absorb_fused_mla_rope_prepare(
-                positions, hidden_states, forward_batch, zero_allocator
-            )
-        elif attn_forward_method == AttnForwardMethod.MLA_FUSED_ROPE_CPU:
-            inner_state = self.forward_absorb_fused_mla_rope_cpu_prepare(
-                positions, hidden_states, forward_batch, zero_allocator
-            )
-        else:
-            raise NotImplementedError
+        inner_state = self.forward_absorb_prepare(
+            positions, hidden_states, forward_batch, zero_allocator
+        )
+
+        # if attn_forward_method == AttnForwardMethod.MHA:
+        #     inner_state = self.forward_normal_prepare(
+        #         positions, hidden_states, forward_batch, zero_allocator
+        #     )
+        # elif attn_forward_method == AttnForwardMethod.MHA_CHUNKED_KV:
+        #     inner_state = self.forward_normal_chunked_kv_prepare(
+        #         positions, hidden_states, forward_batch, zero_allocator
+        #     )
+        # elif attn_forward_method == AttnForwardMethod.MLA:
+        #     inner_state = self.forward_absorb_prepare(
+        #         positions, hidden_states, forward_batch, zero_allocator
+        #     )
+        # elif attn_forward_method == AttnForwardMethod.MLA_FUSED_ROPE:
+        #     inner_state = self.forward_absorb_fused_mla_rope_prepare(
+        #         positions, hidden_states, forward_batch, zero_allocator
+        #     )
+        # elif attn_forward_method == AttnForwardMethod.MLA_FUSED_ROPE_CPU:
+        #     inner_state = self.forward_absorb_fused_mla_rope_cpu_prepare(
+        #         positions, hidden_states, forward_batch, zero_allocator
+        #     )
+        # else:
+        #     raise NotImplementedError
         return None, attn_forward_method, forward_batch, inner_state
 
     def forward_core(self, intermediate_state):
@@ -1126,18 +1139,20 @@ class DeepseekV2AttentionMLA(nn.Module):
         if inner_state is None:
             return hidden_states
 
-        if attn_forward_method == AttnForwardMethod.MHA:
-            return self.forward_normal_core(*inner_state)
-        elif attn_forward_method == AttnForwardMethod.MHA_CHUNKED_KV:
-            return self.forward_normal_chunked_kv_core(*inner_state)
-        elif attn_forward_method == AttnForwardMethod.MLA:
-            return self.forward_absorb_core(*inner_state)
-        elif attn_forward_method == AttnForwardMethod.MLA_FUSED_ROPE:
-            return self.forward_absorb_fused_mla_rope_core(*inner_state)
-        elif attn_forward_method == AttnForwardMethod.MLA_FUSED_ROPE_CPU:
-            return self.forward_absorb_fused_mla_rope_cpu_core(*inner_state)
-        else:
-            raise NotImplementedError
+        return self.forward_absorb_core(*inner_state)
+
+        # if attn_forward_method == AttnForwardMethod.MHA:
+        #     return self.forward_normal_core(*inner_state)
+        # elif attn_forward_method == AttnForwardMethod.MHA_CHUNKED_KV:
+        #     return self.forward_normal_chunked_kv_core(*inner_state)
+        # elif attn_forward_method == AttnForwardMethod.MLA:
+        #     return self.forward_absorb_core(*inner_state)
+        # elif attn_forward_method == AttnForwardMethod.MLA_FUSED_ROPE:
+        #     return self.forward_absorb_fused_mla_rope_core(*inner_state)
+        # elif attn_forward_method == AttnForwardMethod.MLA_FUSED_ROPE_CPU:
+        #     return self.forward_absorb_fused_mla_rope_cpu_core(*inner_state)
+        # else:
+        #     raise NotImplementedError
 
     def forward_normal_prepare(
         self,
@@ -1235,8 +1250,13 @@ class DeepseekV2AttentionMLA(nn.Module):
             k_nope = k_nope.unsqueeze(1)
             q = self.q_b_proj(q)[0].view(-1, self.num_local_heads, self.qk_head_dim)
         else:
-            q = self.q_proj(hidden_states)[0].view(
-                -1, self.num_local_heads, self.qk_head_dim
+            # q = self.q_proj(hidden_states)[0].view(
+            #     -1, self.num_local_heads, self.qk_head_dim
+            # )
+            q = self.q_proj(hidden_states)[0]
+            q = tensor_model_parallel_all_gather(q)
+            q = q.view(
+                -1, self.num_heads, self.qk_head_dim
             )
             latent_cache = self.kv_a_proj_with_mqa(hidden_states)[0]
             k_nope = latent_cache[..., : self.kv_lora_rank]
@@ -1312,7 +1332,31 @@ class DeepseekV2AttentionMLA(nn.Module):
             q = torch.cat([q_nope_out, q_pe], dim=-1)
             k = torch.cat([k_nope, k_pe], dim=-1)
             attn_output = self.attn_mqa(q, k, k_nope, forward_batch)
-        attn_output = attn_output.view(-1, self.num_local_heads, self.kv_lora_rank)
+
+            attn_logits, _ = forward_batch.attn_backend.forward_metadata
+
+            if attn_output.shape[0] == 1:
+                # decoding
+
+                # not sure all-reduce or all-gather
+                attn_logits = tensor_model_parallel_all_reduce(attn_logits)
+
+                attn_output = torch.empty(
+                    (attn_logits.shape[0], self.num_local_heads, self.kv_lora_rank),
+                    dtype=attn_output.dtype,
+                    device=attn_output.device,
+                )
+
+                torch.ops.sgl_kernel.decode_merge_attention_sp_cpu_v2(
+                    attn_output,
+                    attn_logits,
+                    get_attention_tp_size(),
+                )
+            else:
+                # prefill: there's no sp here and directly use the attn_output
+                attn_output = attn_output.view(-1, self.num_local_heads, self.kv_lora_rank)
+
+        # attn_output = attn_output.view(-1, self.num_local_heads, self.kv_lora_rank)
 
         if self.use_deep_gemm_bmm:
             attn_output_val, attn_output_scale, masked_m, expected_m, aligned_m = (
@@ -1366,6 +1410,14 @@ class DeepseekV2AttentionMLA(nn.Module):
                     -1, self.num_local_heads, self.v_head_dim
                 ).transpose(0, 1),
             )
+
+        # manually scatter
+        attn_tp_size = get_attention_tp_size()
+        attn_tp_rank = get_attention_tp_rank()
+        start_head = (self.num_heads // attn_tp_size) * attn_tp_rank * self.v_head_dim
+        end_head = (self.num_heads // attn_tp_size) * (attn_tp_rank + 1) * self.v_head_dim
+        attn_bmm_output = attn_bmm_output[:, start_head:end_head]
+
         output, _ = self.o_proj(attn_bmm_output)
 
         return output

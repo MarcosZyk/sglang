@@ -7,6 +7,10 @@ import torch
 from sglang.srt.layers.attention.base_attn_backend import AttentionBackend
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 
+from sglang.srt.layers.dp_attention import get_attention_tp_size, get_attention_tp_rank
+import logging
+logger = logging.getLogger(__file__)
+
 if TYPE_CHECKING:
     from sglang.srt.layers.radix_attention import RadixAttention
     from sglang.srt.model_executor.model_runner import ModelRunner
@@ -21,13 +25,27 @@ class IntelAMXAttnBackend(AttentionBackend):
         self.device = model_runner.device
 
         self.num_head = (
-            model_runner.model_config.num_attention_heads // model_runner.tp_size
+            # model_runner.model_config.num_attention_heads // model_runner.tp_size
+            model_runner.model_config.num_attention_heads
         )
 
         self.v_head_dim = model_runner.token_to_kv_pool.get_value_buffer(0).shape[-1]
 
-        self.decode_attention_fwd = torch.ops.sgl_kernel.decode_attention_cpu
+        self.decode_attention_fwd = torch.ops.sgl_kernel.decode_attention_cpu_v2
         self.extend_attention_fwd = torch.ops.sgl_kernel.extend_attention_cpu
+
+        self.max_position_embeddings = model_runner.model_config.context_len
+        self.tp_size = get_attention_tp_size()
+        self.tp_rank = get_attention_tp_rank()
+        self.kv_block_length = 1024  # hardcoded for now, can be set in model config later
+        self.num_kv_splits = self.max_position_embeddings // (
+            self.kv_block_length * self.tp_size
+        )
+        self.max_model_seq_len = self.num_kv_splits * self.kv_block_length * self.tp_size
+        logger.info(f"Intel AMX backend: tp_size {self.tp_size}, tp_rank {self.tp_rank}, "
+                    f"kv_block_length {self.kv_block_length}, num_kv_splits {self.num_kv_splits}, "
+                    f"max_model_seq_len {self.max_model_seq_len}")
+        # requirement: num_kv_splits * kv_block_length * tp_size >= max_model_seq_len
 
     def init_forward_metadata(self, forward_batch: ForwardBatch):
         """Init the metadata for a forward pass."""
@@ -37,7 +55,8 @@ class IntelAMXAttnBackend(AttentionBackend):
             (
                 bs,
                 self.num_head,
-                8,  # self.num_kv_splits,
+                # 8,  # self.num_kv_splits,
+                self.num_kv_splits,
                 self.v_head_dim + 1,
             ),
             dtype=torch.float32,
@@ -120,6 +139,9 @@ class IntelAMXAttnBackend(AttentionBackend):
             forward_batch.seq_lens,
             layer.scaling,
             layer.logit_cap,
+            self.tp_rank,
+            self.tp_size,
+            self.kv_block_length,
         )
 
         return o
