@@ -633,7 +633,10 @@ class ModelRunner:
         elif self.device == "hpu":
             backend = "hccl"
         elif self.device == "cpu":
-            backend = "gloo"
+            if dist.is_ucc_available():
+                backend = "ucc"
+            else:
+                backend = "gloo"
         elif self.device == "npu":
             backend = "hccl"
 
