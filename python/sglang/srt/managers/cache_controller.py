@@ -336,8 +336,14 @@ class HiCacheController:
             self.tp_world_size = torch.distributed.get_world_size(group=tp_group)
             if self.tp_world_size > 1:
                 group_ranks = torch.distributed.get_process_group_ranks(tp_group)
+                if torch.distributed.is_ucc_available():
+                    prefetch_tp_group_backend = "ucc"
+                    logger.warning(f"[SHENG] Found UCC is available for CPU backend, will use UCC for HiCacheController.")
+                else:
+                    prefetch_tp_group_backend = "gloo"
+                    logger.warning(f"[SHENG] UCC is not available for CPU backend, will use Gloo for HiCacheController.")
                 self.prefetch_tp_group = torch.distributed.new_group(
-                    group_ranks, backend="gloo"
+                    group_ranks, backend=prefetch_tp_group_backend
                 )
 
             # Select the get and set functions
