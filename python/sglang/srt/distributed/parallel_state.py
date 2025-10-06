@@ -239,7 +239,13 @@ class GroupCoordinator:
             )
             # a group with `gloo` backend, to allow direct coordination between
             # processes through the CPU.
-            cpu_group = torch.distributed.new_group(ranks, backend="gloo")
+            if torch.distributed.is_ucc_available():
+                cpu_group_backend = "ucc"
+                logger.warning(f"[SHENG] Found UCC is available for CPU backend, will use UCC for GroupCoordinator.")
+            else:
+                cpu_group_backend = "gloo"
+                logger.warning(f"[SHENG] UCC is not available for CPU backend, will use UCC for GroupCoordinator.")
+            cpu_group = torch.distributed.new_group(ranks, backend=cpu_group_backend)
             if self.rank in ranks:
                 self.ranks = ranks
                 self.world_size = len(ranks)
