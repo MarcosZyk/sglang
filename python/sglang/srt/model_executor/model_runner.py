@@ -635,12 +635,12 @@ class ModelRunner:
         elif self.device == "cpu":
             if dist.is_ucc_available():
                 logger.warning(
-                    "[SHENG] Found UCC is available for CPU backend, will use UCC as the communication backend."
+                    "[SHENG] Found UCC is available for CPU backend, will use UCC for ModelRunner."
                 )
                 backend = "ucc"
             else:
                 logger.warning(
-                    "[SHENG] UCC is not available for CPU backend, will use Gloo as the communication backend."
+                    "[SHENG] UCC is not available for CPU backend, will use Gloo for ModelRunner."
                 )
                 backend = "gloo"
         elif self.device == "npu":
