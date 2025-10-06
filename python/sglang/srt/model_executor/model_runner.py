@@ -567,8 +567,14 @@ class ModelRunner:
             backend = "hccl"
         elif self.device == "cpu":
             if dist.is_ucc_available():
+                logger.warning(
+                    "[SHENG] Found UCC is available for CPU backend, will use UCC as the communication backend."
+                )
                 backend = "ucc"
             else:
+                logger.warning(
+                    "[SHENG] UCC is not available for CPU backend, will use Gloo as the communication backend."
+                )
                 backend = "gloo"
         elif self.device == "npu":
             backend = "hccl"
