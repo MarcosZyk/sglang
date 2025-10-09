@@ -31,8 +31,9 @@ class IntelAMXAttnBackend(AttentionBackend):
 
         self.v_head_dim = model_runner.token_to_kv_pool.get_value_buffer(0).shape[-1]
 
-        self.decode_attention_fwd = torch.ops.sgl_kernel.decode_attention_cpu_v2
+        self.decode_attention_fwd = torch.ops.sgl_kernel.decode_attention_cpu
         self.extend_attention_fwd = torch.ops.sgl_kernel.extend_attention_cpu
+        self.decode_attention_fwd_v2 = torch.ops.sgl_kernel.decode_attention_cpu_v2
 
         self.max_position_embeddings = model_runner.model_config.context_len
         self.tp_size = get_attention_tp_size()
@@ -118,6 +119,8 @@ class IntelAMXAttnBackend(AttentionBackend):
     ):
         attn_logits, _ = self.forward_metadata
 
+        seq_len = q.shape[0]
+
         q = q.reshape(-1, layer.tp_q_head_num * layer.qk_head_dim)
 
         if layer.qk_head_dim != layer.v_head_dim:
@@ -125,24 +128,41 @@ class IntelAMXAttnBackend(AttentionBackend):
         else:
             o = torch.empty_like(q)
 
-        self.decode_attention_fwd(
-            q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
-            forward_batch.token_to_kv_pool.get_key_buffer(layer.layer_id),
-            forward_batch.token_to_kv_pool.get_value_buffer(layer.layer_id),
-            o.view(-1, layer.tp_q_head_num, layer.v_head_dim),
-            k,
-            v,
-            forward_batch.out_cache_loc,
-            attn_logits,
-            forward_batch.req_to_token_pool.req_to_token,
-            forward_batch.req_pool_indices,
-            forward_batch.seq_lens,
-            layer.scaling,
-            layer.logit_cap,
-            self.tp_rank,
-            self.tp_size,
-            self.kv_block_length,
-        )
+        if seq_len > 1:
+            self.decode_attention_fwd(
+                q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
+                forward_batch.token_to_kv_pool.get_key_buffer(layer.layer_id),
+                forward_batch.token_to_kv_pool.get_value_buffer(layer.layer_id),
+                o.view(-1, layer.tp_q_head_num, layer.v_head_dim),
+                k,
+                v,
+                forward_batch.out_cache_loc,
+                attn_logits,
+                forward_batch.req_to_token_pool.req_to_token,
+                forward_batch.req_pool_indices,
+                forward_batch.seq_lens,
+                layer.scaling,
+                layer.logit_cap,
+            )
+        else:
+            self.decode_attention_fwd_v2(
+                q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
+                forward_batch.token_to_kv_pool.get_key_buffer(layer.layer_id),
+                forward_batch.token_to_kv_pool.get_value_buffer(layer.layer_id),
+                o.view(-1, layer.tp_q_head_num, layer.v_head_dim),
+                k,
+                v,
+                forward_batch.out_cache_loc,
+                attn_logits,
+                forward_batch.req_to_token_pool.req_to_token,
+                forward_batch.req_pool_indices,
+                forward_batch.seq_lens,
+                layer.scaling,
+                layer.logit_cap,
+                self.tp_rank,
+                self.tp_size,
+                self.kv_block_length,
+            )
 
         return o
 
