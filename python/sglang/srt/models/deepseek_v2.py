@@ -34,6 +34,7 @@ from sglang.srt.distributed import (
     get_tensor_model_parallel_world_size,
     parallel_state,
     tensor_model_parallel_all_reduce,
+    tensor_model_parallel_all_gather,
 )
 from sglang.srt.distributed.device_communicators.pynccl_allocator import (
     use_symmetric_memory,
@@ -776,7 +777,7 @@ class DeepseekV2AttentionMLA(nn.Module):
 
         self.num_heads = num_heads
         assert num_heads % attn_tp_size == 0
-        self.num_local_heads = num_heads // attn_tp_size if not _amx_parallel else num_heads
+        self.num_local_heads = num_heads // attn_tp_size
         self.scaling = self.qk_head_dim**-0.5
         self.rope_theta = rope_theta
         self.max_position_embeddings = max_position_embeddings
@@ -829,18 +830,18 @@ class DeepseekV2AttentionMLA(nn.Module):
         )
 
         if _amx_parallel:
-            self.q_b_proj = RowParallelLinear(
+            self.q_d_proj = RowParallelLinear(
                 q_lora_rank,
                 self.num_heads * self.qk_head_dim,
                 bias=False,
                 quant_config=quant_config,
-                prefix=add_prefix("q_b_proj", prefix),
+                prefix=add_prefix("q_d_proj", prefix),
                 tp_rank=attn_tp_rank,
                 tp_size=attn_tp_size,
             )
             self.k_b_proj = ReplicatedLinear(
-                self.qk_nope_head_dim,
-                self.num_heads * self.kv_lora_rank,
+                self.kv_lora_rank,
+                self.num_heads * self.qk_nope_head_dim,
                 bias=False,
                 quant_config=quant_config,
                 prefix=add_prefix("k_b_proj", prefix),
@@ -892,7 +893,7 @@ class DeepseekV2AttentionMLA(nn.Module):
             self.rotary_emb.forward = self.rotary_emb.forward_native
 
         self.attn_mqa = RadixAttention(
-            self.num_local_heads,
+            self.num_heads,
             self.kv_lora_rank + self.qk_rope_head_dim,
             self.scaling,
             num_kv_heads=1,
@@ -1011,6 +1012,8 @@ class DeepseekV2AttentionMLA(nn.Module):
                     return AttnForwardMethod.MLA_FUSED_ROPE
                 else:
                     return AttnForwardMethod.MLA
+            elif _amx_parallel:
+                return AttnForwardMethod.MLA
             else:
                 if hasattr(self, "fused_qkv_a_proj_with_mqa") and use_intel_amx_backend(
                     self
@@ -1266,7 +1269,17 @@ class DeepseekV2AttentionMLA(nn.Module):
                 k_nope = self.kv_a_layernorm(k_nope)
 
             k_nope = k_nope.unsqueeze(1)
-            q = self.q_b_proj(q)[0].view(-1, self.num_local_heads, self.qk_head_dim)
+
+            if _amx_parallel:
+                tp_rank = get_attention_tp_rank()
+                tp_size = get_attention_tp_size()
+                start_pos = self.q_lora_rank // tp_size * tp_rank
+                end_pos = self.q_lora_rank // tp_size * (tp_rank + 1)
+                scattered_q = q[:, start_pos:end_pos]
+                q = self.q_d_proj(scattered_q)[0]
+                q = tensor_model_parallel_all_reduce(q).view(-1, self.num_heads, self.qk_head_dim)
+            else:
+                q = self.q_b_proj(q)[0].view(-1, self.num_local_heads, self.qk_head_dim)
         else:
             q = self.q_proj(hidden_states)[0].view(
                 -1, self.num_local_heads, self.qk_head_dim
@@ -1307,6 +1320,8 @@ class DeepseekV2AttentionMLA(nn.Module):
             q_nope_out = bmm_fp8(
                 q_nope_val, self.w_kc, q_nope_scale, self.w_scale, torch.bfloat16
             )
+        elif _amx_parallel:
+            q_nope_out = torch.bmm(q_nope.transpose(0, 1), self.w_kd)
         else:
             q_nope_out = torch.bmm(q_nope.transpose(0, 1), self.w_kc)
 
@@ -1341,11 +1356,41 @@ class DeepseekV2AttentionMLA(nn.Module):
                 k_rope=k_pe,
                 **extra_args,
             )
+            attn_output = attn_output.view(-1, self.num_local_heads, self.kv_lora_rank)
+        elif _amx_parallel:
+            q = torch.cat([q_nope_out, q_pe], dim=-1)
+            k = torch.cat([k_nope, k_pe], dim=-1)
+            attn_output = self.attn_mqa(q, k, k_nope, forward_batch)
+
+            attn_logits, _ = forward_batch.attn_backend.forward_metadata
+
+            attn_logits = attn_logits[:, :, :1, :]
+            flat_logits = attn_logits.flatten()
+            gathered_logits = tensor_model_parallel_all_gather(flat_logits).view(
+                -1,
+                attn_logits.shape[1],
+                1,
+                attn_logits.shape[3],
+            )
+            attn_logits = torch.cat(gathered_logits.split(attn_logits.shape[0], dim=0), dim=2)
+
+            attn_output = torch.empty(
+                (attn_logits.shape[0], self.num_heads, self.kv_lora_rank),
+                dtype=attn_output.dtype,
+                device=attn_output.device,
+            )
+
+            torch.ops.sgl_kernel.decode_merge_attention_sp_cpu_v2(
+                attn_output,
+                attn_logits,
+                get_attention_tp_size(),
+            )
+
         else:
             q = torch.cat([q_nope_out, q_pe], dim=-1)
             k = torch.cat([k_nope, k_pe], dim=-1)
             attn_output = self.attn_mqa(q, k, k_nope, forward_batch)
-        attn_output = attn_output.view(-1, self.num_local_heads, self.kv_lora_rank)
+            attn_output = attn_output.view(-1, self.num_local_heads, self.kv_lora_rank)
 
         if self.use_deep_gemm_bmm:
             attn_output_val, attn_output_scale, masked_m, expected_m, aligned_m = (
@@ -1386,6 +1431,19 @@ class DeepseekV2AttentionMLA(nn.Module):
                 torch.bfloat16,
             )
             attn_bmm_output = attn_bmm_output.transpose(0, 1).flatten(1, 2)
+        elif _amx_parallel:
+            attn_bmm_output = torch.empty(
+                (attn_output.shape[0], self.num_heads * (self.v_head_dim // get_attention_tp_size())),
+                dtype=attn_output.dtype,
+                device=attn_output.device,
+            )
+            torch.bmm(
+                attn_output.transpose(0, 1),
+                self.w_vd,
+                out=attn_bmm_output.view(
+                    -1, self.num_heads, self.v_head_dim // get_attention_tp_size()
+                ).transpose(0, 1),
+            )
         else:
             attn_bmm_output = torch.empty(
                 (attn_output.shape[0], self.num_local_heads * self.v_head_dim),
@@ -2496,10 +2554,10 @@ class DeepseekV2ForCausalLM(nn.Module):
             if _is_hip:
                 self_attn.w_scale *= 2.0
 
-        w_d = w.unflatten(0, (-1, self_attn.qk_nope_head_dim + self_attn.v_head_dim))
         if module_name == "k_b_proj":
+            w_d = w.unflatten(0, (-1, self_attn.qk_nope_head_dim))
             self_attn.w_kd = bind_or_assign(
-                self_attn.w_kd, w_d.transpose(1, 2).contiguous().transpose(1, 2)
+                self_attn.w_kd, w_d.contiguous().transpose(1, 2)
             )
             # TODO: remove this after adding FP8 support in bmm cpu kernel
             if _is_cpu and _is_cpu_amx_available and w.dtype == torch.float8_e4m3fn:
@@ -2507,6 +2565,7 @@ class DeepseekV2ForCausalLM(nn.Module):
                     self_attn.w_kd.to(torch.bfloat16) * self_attn.w_scale
                 )
         elif module_name == "v_b_proj":
+            w_d = w.unflatten(0, (-1, self_attn.v_head_dim // get_attention_tp_size()))
             self_attn.w_vd = bind_or_assign(
                 self_attn.w_vd, w_d.transpose(1, 2).contiguous().transpose(1, 2)
             )
@@ -2794,13 +2853,31 @@ class DeepseekV2ForCausalLM(nn.Module):
                                             f"{scale[0]}_proj", "attn_mqa"
                                         )
                                         break
-                            if "kv_b_proj" in name:
-                                if name not in params_dict:
-                                    # modelopt ckpt contains not needed weights for MTP module:
-                                    # model.decoder.self_attn.attn_mqa.v_scale and
-                                    # model.decoder.self_attn.attn_mqa.k_scale
-                                    logger.warning(f"{name} not found in params_dict.")
-                                    continue
+                            if name not in params_dict:
+                                # modelopt ckpt contains not needed weights for MTP module:
+                                # model.decoder.self_attn.attn_mqa.v_scale and
+                                # model.decoder.self_attn.attn_mqa.k_scale
+                                logger.warning(f"{name} not found in params_dict.")
+                                continue
+
+                            if "q_b_proj" in name:
+                                q_b_param = params_dict[name]
+                                q_b_weight_loader = getattr(
+                                    q_b_param, "weight_loader", default_weight_loader
+                                )
+                                futures.append(
+                                    executor.submit(q_b_weight_loader, q_b_param, loaded_weight)
+                                )
+
+                                q_d_param = params_dict[name.replace("q_b_proj", "q_d_proj")]
+                                q_d_weight_loader = getattr(
+                                    q_d_param, "weight_loader", default_weight_loader
+                                )
+                                futures.append(
+                                    executor.submit(q_d_weight_loader, q_d_param, loaded_weight)
+                                )
+
+                            elif "kv_b_proj" in name:
                                 k_len = self.config.num_key_value_heads * self.config.qk_nope_head_dim
                                 v_len = self.config.num_key_value_heads * self.config.v_head_dim
                                 weight_len = loaded_weight.shape[0]
@@ -2832,12 +2909,6 @@ class DeepseekV2ForCausalLM(nn.Module):
                                     executor.submit(v_proj_weight_loader, v_proj_param, v_proj_weight)
                                 )
                             else:
-                                if name not in params_dict:
-                                    # modelopt ckpt contains not needed weights for MTP module:
-                                    # model.decoder.self_attn.attn_mqa.v_scale and
-                                    # model.decoder.self_attn.attn_mqa.k_scale
-                                    logger.warning(f"{name} not found in params_dict.")
-                                    continue
                                 param = params_dict[name]
                                 weight_loader = getattr(
                                     param, "weight_loader", default_weight_loader
