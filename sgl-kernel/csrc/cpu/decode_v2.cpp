@@ -839,7 +839,11 @@ void decode_accumulate_kv_splits(
       for (int64_t kv_id = 0; kv_id < num_kv_splits; ++kv_id) {
         float* __restrict__ tv = acc + kv_id * l_stride2;
         const float tlogic = (acc + kv_id * l_stride2)[head_size_v];
+        const float flag = (acc + kv_id * l_stride2)[head_size_v + 1];
 
+        if (flag == 0.f) {
+          continue;
+        }
         float m_i = std::max(tlogic, m_prime);
         float m_delta = std::exp(m_prime - m_i);
         float e_logic = std::exp(tlogic - m_i);
@@ -855,12 +859,18 @@ void decode_accumulate_kv_splits(
         s_prime = s_prime * m_delta + e_logic;
         m_prime = m_i;
       }
+
+      if (s_prime == 0.f) {
+        fill_stub(acc, 0.f, head_size_v + 2);
+        continue;
+      }
       // don't save the normalized output now, we need to accumulate across tp_ranks
       // copy_stub<scalar_t>(output + i * head_size_v, acc, 1 / s_prime, head_size_v);
       // save new attn logits for distributed accumulation
       float r_s_prime = 1 / s_prime;
       at::vec::map<float>([r_s_prime](Vec x) { return x * Vec(r_s_prime); }, acc, acc, head_size_v);
       acc[head_size_v] = m_prime + std::log(s_prime);
+      acc[head_size_v + 1] = 1.f; // mark as valid
     }
   });
 }
@@ -894,8 +904,9 @@ void decode_attention_kernel_impl(
   using Vec = at::vec::Vectorized<float>;
 
   // strides
-  const int64_t l_stride1 = num_kv_splits * (head_size_v + 1);
-  const int64_t l_stride2 = head_size_v + 1;
+  // new layout: [head_size_v values] + [header: m+log(s)] + [flag: 0/1]
+  const int64_t l_stride1 = num_kv_splits * (head_size_v + 2);
+  const int64_t l_stride2 = head_size_v + 2;
 
   const bool has_logit_cap = logit_cap > 0;
   float rlogit_cap = has_logit_cap ? 1 / logit_cap : 0.f;
@@ -927,8 +938,8 @@ void decode_attention_kernel_impl(
       float s_prime = 0.f;
 
       // get v_prime, and init to zero
-      float* __restrict__ v_prime = attn_logits + i * (head_size_v + 1);
-      fill_stub(v_prime, 0.f, head_size_v);
+      float* __restrict__ v_prime = attn_logits + i * (head_size_v + 2);
+      fill_stub(v_prime, 0.f, head_size_v + 2);
 
       // loop over K and V sequence with BLOCK_N
       for (int64_t n = kv_start; n < kv_end; n += BLOCK_N) {
@@ -1044,9 +1055,9 @@ void decode_attention_mla_kernel_impl(
   const int64_t BLOCK_H = batches == 1 ? 6 : (batches > 16 ? 22 : 11);
 
   // strides
-  const int64_t l_stride0 = num_heads * num_kv_splits * (head_size_v + 1);
-  const int64_t l_stride1 = num_kv_splits * (head_size_v + 1);
-  const int64_t l_stride2 = head_size_v + 1;
+  const int64_t l_stride0 = num_heads * num_kv_splits * (head_size_v + 2);
+  const int64_t l_stride1 = num_kv_splits * (head_size_v + 2);
+  const int64_t l_stride2 = head_size_v + 2;
 
   TORCH_CHECK(logit_cap == 0.f, "decode MLA: expect no logit_cap.");
 
@@ -1098,7 +1109,7 @@ void decode_attention_mla_kernel_impl(
       // get v_prime, and init to zero
       float* __restrict__ v_prime = attn_logits + bs * l_stride0 + h_start * l_stride1 + kv_id * l_stride2;
       for (int64_t h = 0; h < h_size; ++h) {
-        fill_stub(v_prime + h * l_stride1, 0.f, head_size_v);
+        fill_stub(v_prime + h * l_stride1, 0.f, head_size_v + 2);
       }
 
       if (kv_start >= seq_len_kv) {
@@ -1195,10 +1206,14 @@ void decode_attention_mla_kernel_impl(
       // only update v' when kv_split_size > 0
       if (kv_end > kv_start) {
         for (int64_t h = 0; h < h_size; ++h) {
+          if (s_prime[h] == 0.f) {
+            continue;
+          }
           float s = 1 / s_prime[h];
           at::vec::map<float>(
               [s](Vec out) { return out * Vec(s); }, v_prime + h * l_stride1, v_prime + h * l_stride1, head_size_v);
           (v_prime + h * l_stride1)[head_size_v] = m_prime[h] + std::log(s_prime[h]);
+          (v_prime + h * l_stride1)[head_size_v + 1] = 1.f;  // reset flag
         }
       }
 
@@ -1248,9 +1263,9 @@ void decode_attention_grouped_kernel_impl(
   const int64_t BLOCK_H = std::min(4 * batches, kBLOCK_H);
 
   // strides
-  const int64_t l_stride0 = num_heads * num_kv_splits * (head_size_v + 1);
-  const int64_t l_stride1 = num_kv_splits * (head_size_v + 1);
-  const int64_t l_stride2 = head_size_v + 1;
+  const int64_t l_stride0 = num_heads * num_kv_splits * (head_size_v + 2);
+  const int64_t l_stride1 = num_kv_splits * (head_size_v + 2);
+  const int64_t l_stride2 = head_size_v + 2;
 
   const bool has_logit_cap = logit_cap > 0;
   float rlogit_cap = has_logit_cap ? 1 / logit_cap : 0.f;
@@ -1294,7 +1309,7 @@ void decode_attention_grouped_kernel_impl(
       // get v_prime, and init to zero
       float* __restrict__ v_prime = attn_logits + bs * l_stride0 + h_start * l_stride1 + kv_id * l_stride2;
       for (int64_t h = 0; h < h_size; ++h) {
-        fill_stub(v_prime + h * l_stride1, 0.f, head_size_v);
+        fill_stub(v_prime + h * l_stride1, 0.f, head_size_v + 2);
       }
 
       // loop over K and V sequence with BLOCK_N
@@ -1364,10 +1379,14 @@ void decode_attention_grouped_kernel_impl(
       // only update v' when kv_split_size > 0
       if (kv_end > kv_start) {
         for (int64_t h = 0; h < h_size; ++h) {
+          if (s_prime[h] == 0.f) {
+            continue;
+          }
           float s = 1 / s_prime[h];
           at::vec::map<float>(
               [s](Vec out) { return out * Vec(s); }, v_prime + h * l_stride1, v_prime + h * l_stride1, head_size_v);
           (v_prime + h * l_stride1)[head_size_v] = m_prime[h] + std::log(s_prime[h]);
+          (v_prime + h * l_stride1)[head_size_v + 1] = 1.f; // marked as contributing split
         }
       }
 
@@ -1454,7 +1473,7 @@ void decode_attention_cpu_v2(
   CHECK_EQ(loc.numel(), num_seqs);
   CHECK_EQ(attn_logits.size(0), num_seqs);
   CHECK_EQ(attn_logits.size(1), num_heads);
-  CHECK_EQ(attn_logits.size(3), head_size_v + 1);
+  CHECK_EQ(attn_logits.size(3), head_size_v + 2);
   CHECK_EQ(attn_logits.scalar_type(), at::kFloat);
 
   // strides for query
@@ -1643,7 +1662,10 @@ void decode_merge_kv_splits_sp(
       for (int64_t kv_id = 0; kv_id < tp_size; ++kv_id) {
         float* __restrict__ tv = acc + kv_id * l_stride2;
         const float tlogic = (acc + kv_id * l_stride2)[head_size_v];
-
+        const float flat = (acc + kv_id * l_stride2)[head_size_v + 1];
+        if (flat == 0.f) {
+            continue;
+        }
         float m_i = std::max(tlogic, m_prime);
         float m_delta = std::exp(m_prime - m_i);
         float e_logic = std::exp(tlogic - m_i);
@@ -1680,7 +1702,8 @@ void decode_merge_attention_sp_cpu_v2(
 
   int64_t num_seqs = attn_logits.size(0);
   int64_t num_heads = attn_logits.size(1);
-  int64_t head_size_v = attn_logits.size(3) - 1;
+  // attn_logits layout: [..., head_size_v(values), header, flag]
+  int64_t head_size_v = attn_logits.size(3) - 2;
   int64_t l_stride1 = attn_logits.size(2) * (attn_logits.size(3));
   int64_t l_stride2 = attn_logits.size(3);
 

@@ -15,6 +15,10 @@ if TYPE_CHECKING:
     from sglang.srt.layers.radix_attention import RadixAttention
     from sglang.srt.model_executor.model_runner import ModelRunner
 
+import os
+
+_amx_parallel = os.getenv("AMX_PARALLEL", 0) == "1"
+
 
 class IntelAMXAttnBackend(AttentionBackend):
     def __init__(self, model_runner: ModelRunner):
@@ -58,7 +62,7 @@ class IntelAMXAttnBackend(AttentionBackend):
                 self.num_head,
                 # 8,  # self.num_kv_splits,
                 self.num_kv_splits,
-                self.v_head_dim + 1,
+                self.v_head_dim + (2 if _amx_parallel else 1),
             ),
             dtype=torch.float32,
             device=self.device,
