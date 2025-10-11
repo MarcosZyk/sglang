@@ -1345,7 +1345,7 @@ class DeepseekV2AttentionMLA(nn.Module):
 
                 attn_logits = attn_logits[:, :, :1, :]
 
-                if forward_batch.seq_lens[0] == 1040:
+                if forward_batch.seq_lens_sum == 1040:
 
                     logger.info(f"attn_logits: {attn_logits}")
                     flat_logits = attn_logits.flatten()
