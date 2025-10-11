@@ -13,7 +13,6 @@ def main():
     parser.add_argument('--ip', '-i', type=str, default="127.0.0.1", )
     parser.add_argument('--port', '-p', type=int, default=30000, )
     parser.add_argument('--model', '-m', type=str, default="deepseek-ai/DeepSeek-V2-Lite-Chat", )
-    parser.add_argument('filename')
 
     # 解析参数
     args = parser.parse_args()
