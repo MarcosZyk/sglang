@@ -1344,14 +1344,19 @@ class DeepseekV2AttentionMLA(nn.Module):
                 attn_logits, _ = forward_batch.attn_backend.forward_metadata
 
                 attn_logits = attn_logits[:, :, :1, :]
+
+                logger.info(f"attn_logits: {attn_logits}")
                 flat_logits = attn_logits.flatten()
+                logger.info(f"flat_logits: {flat_logits}")
                 gathered_logits = tensor_model_parallel_all_gather(flat_logits).view(
                     -1,
                     attn_logits.shape[1],
-                    1,
+                    1, # * rank_size
                     attn_logits.shape[3],
                 )
+                logger.info(f"Gathered_logits: {gathered_logits}")
                 attn_logits = torch.cat(gathered_logits.split(attn_logits.shape[0], dim=0), dim=2)
+                logger.info(f"Final attn_logits: {attn_logits}")
 
                 attn_output = torch.empty(
                     (attn_logits.shape[0], self.num_heads, self.kv_lora_rank),
