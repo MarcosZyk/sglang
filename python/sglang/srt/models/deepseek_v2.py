@@ -1345,54 +1345,26 @@ class DeepseekV2AttentionMLA(nn.Module):
 
                 attn_logits = attn_logits[:, :, :1, :]
 
-                if not hasattr(self, "has_print") and forward_batch.seq_lens_sum > 1040:
-                    self.has_print = False
+                flat_logits = attn_logits.flatten()
+                gathered_logits = tensor_model_parallel_all_gather(flat_logits).view(
+                    -1,
+                    attn_logits.shape[1],
+                    1,  # * rank_size
+                    attn_logits.shape[3],
+                )
+                attn_logits = torch.cat(gathered_logits.split(attn_logits.shape[0], dim=0), dim=2)
 
-                    logger.info(f"attn_logits: {attn_logits}")
-                    flat_logits = attn_logits.flatten()
-                    logger.info(f"flat_logits: {flat_logits}")
-                    gathered_logits = tensor_model_parallel_all_gather(flat_logits).view(
-                        -1,
-                        attn_logits.shape[1],
-                        1, # * rank_size
-                        attn_logits.shape[3],
-                    )
-                    logger.info(f"Gathered_logits: {gathered_logits}")
-                    attn_logits = torch.cat(gathered_logits.split(attn_logits.shape[0], dim=0), dim=2)
-                    logger.info(f"Final attn_logits: {attn_logits}")
+                attn_output = torch.empty(
+                    (attn_logits.shape[0], self.num_heads, self.kv_lora_rank),
+                    dtype=attn_output.dtype,
+                    device=attn_output.device,
+                )
 
-                    attn_output = torch.empty(
-                        (attn_logits.shape[0], self.num_heads, self.kv_lora_rank),
-                        dtype=attn_output.dtype,
-                        device=attn_output.device,
-                    )
-
-                    torch.ops.sgl_kernel.decode_merge_attention_sp_cpu_v2(
-                        attn_output,
-                        attn_logits,
-                        get_attention_tp_size(),
-                    )
-                else:
-                    flat_logits = attn_logits.flatten()
-                    gathered_logits = tensor_model_parallel_all_gather(flat_logits).view(
-                        -1,
-                        attn_logits.shape[1],
-                        1,  # * rank_size
-                        attn_logits.shape[3],
-                    )
-                    attn_logits = torch.cat(gathered_logits.split(attn_logits.shape[0], dim=0), dim=2)
-
-                    attn_output = torch.empty(
-                        (attn_logits.shape[0], self.num_heads, self.kv_lora_rank),
-                        dtype=attn_output.dtype,
-                        device=attn_output.device,
-                    )
-
-                    torch.ops.sgl_kernel.decode_merge_attention_sp_cpu_v2(
-                        attn_output,
-                        attn_logits,
-                        get_attention_tp_size(),
-                    )
+                torch.ops.sgl_kernel.decode_merge_attention_sp_cpu_v2(
+                    attn_output,
+                    attn_logits,
+                    get_attention_tp_size(),
+                )
 
         if self.use_deep_gemm_bmm:
             attn_output_val, attn_output_scale, masked_m, expected_m, aligned_m = (
