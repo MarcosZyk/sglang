@@ -153,6 +153,7 @@ if _is_hip:
 _is_flashinfer_available = is_flashinfer_available()
 _is_sm100_supported = is_cuda() and is_sm100_supported()
 
+_amx_parallel = os.getenv("AMX_PARALLEL", 0) == "1"
 
 logger = logging.getLogger(__name__)
 
@@ -776,8 +777,7 @@ class DeepseekV2AttentionMLA(nn.Module):
 
         self.num_heads = num_heads
         assert num_heads % attn_tp_size == 0
-        # self.num_local_heads = num_heads // attn_tp_size
-        self.num_local_heads = num_heads
+        self.num_local_heads = num_heads // attn_tp_size
         self.scaling = self.qk_head_dim**-0.5
         self.rope_theta = rope_theta
         self.max_position_embeddings = max_position_embeddings
@@ -819,22 +819,27 @@ class DeepseekV2AttentionMLA(nn.Module):
                 prefix=add_prefix("kv_a_proj_with_mqa", prefix),
             )
 
-        self.kv_b_proj = ReplicatedLinear(
+        self.kv_b_proj = ColumnParallelLinear(
             self.kv_lora_rank,
             self.num_heads * (self.qk_nope_head_dim + self.v_head_dim),
             bias=False,
             quant_config=quant_config,
             prefix=add_prefix("kv_b_proj", prefix),
+            tp_rank=attn_tp_rank,
+            tp_size=attn_tp_size,
         )
-        # self.kv_b_proj = ColumnParallelLinear(
-        #     self.kv_lora_rank,
-        #     self.num_heads * (self.qk_nope_head_dim + self.v_head_dim),
-        #     bias=False,
-        #     quant_config=quant_config,
-        #     prefix=add_prefix("kv_b_proj", prefix),
-        #     tp_rank=attn_tp_rank,
-        #     tp_size=attn_tp_size,
-        # )
+
+        if _amx_parallel:
+            self.kv_d_proj = ReplicatedLinear(
+                self.kv_lora_rank,
+                self.num_heads * (self.qk_nope_head_dim + self.v_head_dim),
+                bias=False,
+                quant_config=quant_config,
+                prefix=add_prefix("kv_d_proj", prefix),
+            )
+            self.w_kd = None
+            self.w_vd = None
+
         # O projection.
         self.o_proj = RowParallelLinear(
             self.num_heads * self.v_head_dim,
@@ -1104,32 +1109,28 @@ class DeepseekV2AttentionMLA(nn.Module):
 
         attn_forward_method = self.dispatch_attn_forward_method(forward_batch)
 
-        inner_state = self.forward_absorb_prepare(
-            positions, hidden_states, forward_batch, zero_allocator
-        )
-
-        # if attn_forward_method == AttnForwardMethod.MHA:
-        #     inner_state = self.forward_normal_prepare(
-        #         positions, hidden_states, forward_batch, zero_allocator
-        #     )
-        # elif attn_forward_method == AttnForwardMethod.MHA_CHUNKED_KV:
-        #     inner_state = self.forward_normal_chunked_kv_prepare(
-        #         positions, hidden_states, forward_batch, zero_allocator
-        #     )
-        # elif attn_forward_method == AttnForwardMethod.MLA:
-        #     inner_state = self.forward_absorb_prepare(
-        #         positions, hidden_states, forward_batch, zero_allocator
-        #     )
-        # elif attn_forward_method == AttnForwardMethod.MLA_FUSED_ROPE:
-        #     inner_state = self.forward_absorb_fused_mla_rope_prepare(
-        #         positions, hidden_states, forward_batch, zero_allocator
-        #     )
-        # elif attn_forward_method == AttnForwardMethod.MLA_FUSED_ROPE_CPU:
-        #     inner_state = self.forward_absorb_fused_mla_rope_cpu_prepare(
-        #         positions, hidden_states, forward_batch, zero_allocator
-        #     )
-        # else:
-        #     raise NotImplementedError
+        if attn_forward_method == AttnForwardMethod.MHA:
+            inner_state = self.forward_normal_prepare(
+                positions, hidden_states, forward_batch, zero_allocator
+            )
+        elif attn_forward_method == AttnForwardMethod.MHA_CHUNKED_KV:
+            inner_state = self.forward_normal_chunked_kv_prepare(
+                positions, hidden_states, forward_batch, zero_allocator
+            )
+        elif attn_forward_method == AttnForwardMethod.MLA:
+            inner_state = self.forward_absorb_prepare(
+                positions, hidden_states, forward_batch, zero_allocator
+            )
+        elif attn_forward_method == AttnForwardMethod.MLA_FUSED_ROPE:
+            inner_state = self.forward_absorb_fused_mla_rope_prepare(
+                positions, hidden_states, forward_batch, zero_allocator
+            )
+        elif attn_forward_method == AttnForwardMethod.MLA_FUSED_ROPE_CPU:
+            inner_state = self.forward_absorb_fused_mla_rope_cpu_prepare(
+                positions, hidden_states, forward_batch, zero_allocator
+            )
+        else:
+            raise NotImplementedError
         return None, attn_forward_method, forward_batch, inner_state
 
     def forward_core(self, intermediate_state):
@@ -1139,20 +1140,18 @@ class DeepseekV2AttentionMLA(nn.Module):
         if inner_state is None:
             return hidden_states
 
-        return self.forward_absorb_core(*inner_state)
-
-        # if attn_forward_method == AttnForwardMethod.MHA:
-        #     return self.forward_normal_core(*inner_state)
-        # elif attn_forward_method == AttnForwardMethod.MHA_CHUNKED_KV:
-        #     return self.forward_normal_chunked_kv_core(*inner_state)
-        # elif attn_forward_method == AttnForwardMethod.MLA:
-        #     return self.forward_absorb_core(*inner_state)
-        # elif attn_forward_method == AttnForwardMethod.MLA_FUSED_ROPE:
-        #     return self.forward_absorb_fused_mla_rope_core(*inner_state)
-        # elif attn_forward_method == AttnForwardMethod.MLA_FUSED_ROPE_CPU:
-        #     return self.forward_absorb_fused_mla_rope_cpu_core(*inner_state)
-        # else:
-        #     raise NotImplementedError
+        if attn_forward_method == AttnForwardMethod.MHA:
+            return self.forward_normal_core(*inner_state)
+        elif attn_forward_method == AttnForwardMethod.MHA_CHUNKED_KV:
+            return self.forward_normal_chunked_kv_core(*inner_state)
+        elif attn_forward_method == AttnForwardMethod.MLA:
+            return self.forward_absorb_core(*inner_state)
+        elif attn_forward_method == AttnForwardMethod.MLA_FUSED_ROPE:
+            return self.forward_absorb_fused_mla_rope_core(*inner_state)
+        elif attn_forward_method == AttnForwardMethod.MLA_FUSED_ROPE_CPU:
+            return self.forward_absorb_fused_mla_rope_cpu_core(*inner_state)
+        else:
+            raise NotImplementedError
 
     def forward_normal_prepare(
         self,
@@ -1250,14 +1249,17 @@ class DeepseekV2AttentionMLA(nn.Module):
             k_nope = k_nope.unsqueeze(1)
             q = self.q_b_proj(q)[0].view(-1, self.num_local_heads, self.qk_head_dim)
         else:
-            # q = self.q_proj(hidden_states)[0].view(
-            #     -1, self.num_local_heads, self.qk_head_dim
-            # )
-            q = self.q_proj(hidden_states)[0]
-            q = tensor_model_parallel_all_gather(q)
-            q = q.view(
-                -1, self.num_heads, self.qk_head_dim
-            )
+            if _amx_parallel:
+                q = self.q_proj(hidden_states)[0]
+                q = tensor_model_parallel_all_gather(q)
+                q = q.view(
+                    -1, self.num_heads, self.qk_head_dim
+                )
+            else:
+                q = self.q_proj(hidden_states)[0].view(
+                    -1, self.num_local_heads, self.qk_head_dim
+                )
+
             latent_cache = self.kv_a_proj_with_mqa(hidden_states)[0]
             k_nope = latent_cache[..., : self.kv_lora_rank]
             k_nope = self.kv_a_layernorm(k_nope).unsqueeze(1)
@@ -1328,15 +1330,16 @@ class DeepseekV2AttentionMLA(nn.Module):
                 k_rope=k_pe,
                 **extra_args,
             )
+            attn_output = attn_output.view(-1, self.num_local_heads, self.kv_lora_rank)
         else:
             q = torch.cat([q_nope_out, q_pe], dim=-1)
             k = torch.cat([k_nope, k_pe], dim=-1)
             attn_output = self.attn_mqa(q, k, k_nope, forward_batch)
 
-            attn_logits, _ = forward_batch.attn_backend.forward_metadata
-
-            if attn_output.shape[0] == 1:
-                # decoding
+            if not _amx_parallel:
+                attn_output = attn_output.view(-1, self.num_local_heads, self.kv_lora_rank)
+            else:
+                attn_logits, _ = forward_batch.attn_backend.forward_metadata
 
                 attn_logits = attn_logits[:, :, :1, :]
                 flat_logits = attn_logits.flatten()
@@ -1349,7 +1352,7 @@ class DeepseekV2AttentionMLA(nn.Module):
                 attn_logits = torch.cat(gathered_logits.split(attn_logits.shape[0], dim=0), dim=2)
 
                 attn_output = torch.empty(
-                    (attn_logits.shape[0], self.num_local_heads, self.kv_lora_rank),
+                    (attn_logits.shape[0], self.num_heads, self.kv_lora_rank),
                     dtype=attn_output.dtype,
                     device=attn_output.device,
                 )
@@ -1359,11 +1362,6 @@ class DeepseekV2AttentionMLA(nn.Module):
                     attn_logits,
                     get_attention_tp_size(),
                 )
-            else:
-                # prefill: there's no sp here and directly use the attn_output
-                attn_output = attn_output.view(-1, self.num_local_heads, self.kv_lora_rank)
-
-        # attn_output = attn_output.view(-1, self.num_local_heads, self.kv_lora_rank)
 
         if self.use_deep_gemm_bmm:
             attn_output_val, attn_output_scale, masked_m, expected_m, aligned_m = (
@@ -1418,12 +1416,13 @@ class DeepseekV2AttentionMLA(nn.Module):
                 ).transpose(0, 1),
             )
 
-        # manually scatter
-        attn_tp_size = get_attention_tp_size()
-        attn_tp_rank = get_attention_tp_rank()
-        start_head = (self.num_heads // attn_tp_size) * attn_tp_rank * self.v_head_dim
-        end_head = (self.num_heads // attn_tp_size) * (attn_tp_rank + 1) * self.v_head_dim
-        attn_bmm_output = attn_bmm_output[:, start_head:end_head]
+        if _amx_parallel:
+            # manually scatter
+            attn_tp_size = get_attention_tp_size()
+            attn_tp_rank = get_attention_tp_rank()
+            start_head = (self.num_heads // attn_tp_size) * attn_tp_rank * self.v_head_dim
+            end_head = (self.num_heads // attn_tp_size) * (attn_tp_rank + 1) * self.v_head_dim
+            attn_bmm_output = attn_bmm_output[:, start_head:end_head]
 
         output, _ = self.o_proj(attn_bmm_output)
 
@@ -2287,6 +2286,10 @@ class DeepseekV2ForCausalLM(nn.Module):
                             layer_ids.add(layer_id)
 
         for layer_id in layer_ids:
+
+            if _amx_parallel:
+                self.post_load_kv_d(layer_id)
+
             self_attn = (
                 self.model.layers[layer_id].self_attn
                 if not is_nextn
@@ -2443,6 +2446,154 @@ class DeepseekV2ForCausalLM(nn.Module):
             and self.quant_config.weight_block_size is not None
         ):
             self._weight_requant_ue8m0(is_nextn)
+
+    def post_load_kv_d(self, layer_id):
+        self_attn = (
+            self.model.layers[layer_id].self_attn
+        )
+        if hasattr(self_attn.kv_d_proj, "qweight"):
+            # AWQ compatible
+            if _is_cuda or _is_hip:
+                w = awq_dequantize(
+                    self_attn.kv_d_proj.qweight,
+                    self_attn.kv_d_proj.scales,
+                    self_attn.kv_d_proj.qzeros,
+                ).T
+            else:
+                w = awq_dequantize(
+                    self_attn.kv_d_proj.qweight,
+                    self_attn.kv_d_proj.scales,
+                    self_attn.kv_d_proj.qzeros,
+                    0,
+                    0,
+                    0,
+                ).T
+        else:
+            w = self_attn.kv_d_proj.weight
+        # NOTE(HandH1998): Since `bmm_fp8` only supports per-tensor scale, we have to requantize `self_attn.kv_d_proj`.
+        # This may affect the accuracy of fp8 model.
+        # Fix deepseek v3 blockwise bmm by using deep_gemm
+        use_deep_gemm_bmm = False
+
+        if w.dtype in (
+            torch.float8_e4m3fn,
+            torch.float8_e4m3fnuz,
+        ):
+            if (
+                hasattr(self.quant_config, "weight_block_size")
+                and self.quant_config.weight_block_size is not None
+            ):
+                weight_block_size = self.quant_config.weight_block_size
+                assert hasattr(self_attn.kv_d_proj, "weight_scale_inv")
+                if _is_fp8_fnuz:
+                    weight, weight_scale, _ = normalize_e4m3fn_to_e4m3fnuz(
+                        weight=w,
+                        weight_scale=self_attn.kv_d_proj.weight_scale_inv,
+                        input_scale=None,
+                    )
+                else:
+                    weight = w
+                    weight_scale = self_attn.kv_d_proj.weight_scale_inv
+
+                if (
+                    _is_cuda
+                    and weight_block_size[0] == 128
+                    and weight_block_size[1] == 128
+                ):
+                    if (
+                        deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM
+                        and not deep_gemm_wrapper.DEEPGEMM_BLACKWELL
+                        and get_bool_env_var("SGL_USE_DEEPGEMM_BMM", "false")
+                    ):
+                        block_scale = weight_scale
+                        use_deep_gemm_bmm = True
+                    else:
+                        w = block_quant_dequant(
+                            weight,
+                            weight_scale,
+                            weight_block_size,
+                            torch.bfloat16,
+                        )
+                else:
+                    w, scale = block_quant_to_tensor_quant(
+                        weight, weight_scale, weight_block_size
+                    )
+                    self_attn.w_scale = scale
+            else:
+                if _is_fp8_fnuz:
+                    weight, weight_scale, _ = normalize_e4m3fn_to_e4m3fnuz(
+                        weight=w,
+                        weight_scale=self_attn.kv_d_proj.weight_scale,
+                        input_scale=None,
+                    )
+                else:
+                    weight = w
+                    weight_scale = self_attn.kv_d_proj.weight_scale
+
+                w, scale = channel_quant_to_tensor_quant(weight, weight_scale)
+                self_attn.w_scale = scale
+
+        if w.dtype == torch.int8:
+            if hasattr(self.quant_config, "weight_block_size"):
+                # block-wise int8 need it
+                weight_block_size = self.quant_config.weight_block_size
+                if weight_block_size is not None:
+                    assert hasattr(self_attn.kv_d_proj, "weight_scale_inv")
+                    weight = w
+                    weight_scale = self_attn.kv_d_proj.weight_scale_inv
+                    w = int8_block_dequant(
+                        weight, weight_scale, weight_block_size
+                    ).to(torch.bfloat16)
+            else:
+                # channel-wise int8 need it
+                w = w.to(torch.bfloat16) * self_attn.kv_d_proj.weight_scale.to(
+                    torch.bfloat16
+                )
+
+        w_kd, w_vd = w.unflatten(
+            0, (-1, self_attn.qk_nope_head_dim + self_attn.v_head_dim)
+        ).split([self_attn.qk_nope_head_dim, self_attn.v_head_dim], dim=1)
+        if not use_deep_gemm_bmm:
+            self_attn.w_kd = bind_or_assign(
+                self_attn.w_kd, w_kd.transpose(1, 2).contiguous().transpose(1, 2)
+            )
+            self_attn.w_vd = bind_or_assign(
+                self_attn.w_vd, w_vd.contiguous().transpose(1, 2)
+            )
+            if (
+                hasattr(self_attn.kv_d_proj, "weight_scale")
+                and self_attn.w_scale is None
+            ):
+                self_attn.w_scale = bind_or_assign(
+                    self_attn.w_scale, self_attn.kv_d_proj.weight_scale
+                )
+                if _is_hip:
+                    self_attn.w_scale *= 2.0
+            # TODO: remove this after adding FP8 support in bmm cpu kernel
+            if _is_cpu and _is_cpu_amx_available and w.dtype == torch.float8_e4m3fn:
+                self_attn.w_kd = (
+                    self_attn.w_kd.to(torch.bfloat16) * self_attn.w_scale
+                )
+                self_attn.w_vd = (
+                    self_attn.w_vd.to(torch.bfloat16) * self_attn.w_scale
+                )
+        else:
+            num_tiles_k = self_attn.qk_nope_head_dim // weight_block_size[1]
+            num_tiles_n = self_attn.v_head_dim // weight_block_size[0]
+            ws_kc, ws_vc = block_scale.unflatten(
+                0, (-1, (num_tiles_k + num_tiles_n))
+            ).split([num_tiles_k, num_tiles_n], dim=1)
+            self_attn.w_scale_k = bind_or_assign(
+                self_attn.w_scale_k, ws_kc.transpose(1, 2).contiguous()
+            )
+            self_attn.w_scale_v = bind_or_assign(
+                self_attn.w_scale_v, ws_vc.contiguous()
+            )
+            self_attn.w_kd = bind_or_assign(
+                self_attn.w_kd, w_kd.transpose(1, 2).contiguous()
+            )
+            self_attn.w_vd = bind_or_assign(self_attn.w_vd, w_vd.contiguous())
+            self_attn.use_deep_gemm_bmm = True
 
     def _weight_requant_ue8m0(self, is_nextn=False):
         weight_block_size = self.quant_config.weight_block_size
@@ -2735,6 +2886,14 @@ class DeepseekV2ForCausalLM(nn.Module):
                             futures.append(
                                 executor.submit(weight_loader, param, loaded_weight)
                             )
+                            if _amx_parallel and "kv_b_proj" in name:
+                                kv_d_param = params_dict[name.replace("kv_b_proj", "kv_d_proj")]
+                                kv_d_weight_loader = getattr(
+                                    kv_d_param, "weight_loader", default_weight_loader
+                                )
+                                futures.append(
+                                    executor.submit(kv_d_weight_loader, kv_d_param, loaded_weight)
+                                )
 
             # Wait for all tasks to complete and raise any exceptions.
             for future in concurrent.futures.as_completed(futures):
