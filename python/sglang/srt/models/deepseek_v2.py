@@ -875,7 +875,7 @@ class DeepseekV2AttentionMLA(nn.Module):
             self.rotary_emb.forward = self.rotary_emb.forward_native
 
         self.attn_mqa = RadixAttention(
-            self.num_local_heads,
+            self.num_local_heads if not _amx_parallel else self.num_heads,
             self.kv_lora_rank + self.qk_rope_head_dim,
             self.scaling,
             num_kv_heads=1,
