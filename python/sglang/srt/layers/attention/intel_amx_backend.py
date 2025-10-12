@@ -28,10 +28,12 @@ class IntelAMXAttnBackend(AttentionBackend):
         self.forward_metadata = None
         self.device = model_runner.device
 
-        self.num_head = (
-            # model_runner.model_config.num_attention_heads // model_runner.tp_size
-            model_runner.model_config.num_attention_heads
-        )
+        if _amx_parallel:
+            self.num_head = model_runner.model_config.num_attention_heads
+        else:
+            self.num_head = (
+                model_runner.model_config.num_attention_heads // model_runner.tp_size
+            )
 
         self.v_head_dim = model_runner.token_to_kv_pool.get_value_buffer(0).shape[-1]
 
@@ -61,7 +63,7 @@ class IntelAMXAttnBackend(AttentionBackend):
                 bs,
                 self.num_head,
                 # 8,  # self.num_kv_splits,
-                self.num_kv_splits,
+                self.num_kv_splits if _amx_parallel else 8,
                 self.v_head_dim + (2 if _amx_parallel else 1),
             ),
             dtype=torch.float32,
