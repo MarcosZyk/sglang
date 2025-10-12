@@ -123,8 +123,6 @@ class IntelAMXAttnBackend(AttentionBackend):
     ):
         attn_logits, _ = self.forward_metadata
 
-        seq_len = q.shape[0]
-
         q = q.reshape(-1, layer.tp_q_head_num * layer.qk_head_dim)
 
         if layer.qk_head_dim != layer.v_head_dim:
@@ -132,23 +130,7 @@ class IntelAMXAttnBackend(AttentionBackend):
         else:
             o = torch.empty_like(q)
 
-        if seq_len > 1:
-            self.decode_attention_fwd(
-                q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
-                forward_batch.token_to_kv_pool.get_key_buffer(layer.layer_id),
-                forward_batch.token_to_kv_pool.get_value_buffer(layer.layer_id),
-                o.view(-1, layer.tp_q_head_num, layer.v_head_dim),
-                k,
-                v,
-                forward_batch.out_cache_loc,
-                attn_logits,
-                forward_batch.req_to_token_pool.req_to_token,
-                forward_batch.req_pool_indices,
-                forward_batch.seq_lens,
-                layer.scaling,
-                layer.logit_cap,
-            )
-        else:
+        if _amx_parallel and forward_batch.forward_mode.is_decode():
             self.decode_attention_fwd_v2(
                 q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
                 forward_batch.token_to_kv_pool.get_key_buffer(layer.layer_id),
@@ -166,6 +148,22 @@ class IntelAMXAttnBackend(AttentionBackend):
                 self.tp_rank,
                 self.tp_size,
                 self.kv_block_length,
+            )
+        else:
+            self.decode_attention_fwd(
+                q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
+                forward_batch.token_to_kv_pool.get_key_buffer(layer.layer_id),
+                forward_batch.token_to_kv_pool.get_value_buffer(layer.layer_id),
+                o.view(-1, layer.tp_q_head_num, layer.v_head_dim),
+                k,
+                v,
+                forward_batch.out_cache_loc,
+                attn_logits,
+                forward_batch.req_to_token_pool.req_to_token,
+                forward_batch.req_pool_indices,
+                forward_batch.seq_lens,
+                layer.scaling,
+                layer.logit_cap,
             )
 
         return o
