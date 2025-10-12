@@ -1347,14 +1347,13 @@ class DeepseekV2AttentionMLA(nn.Module):
                 q_nope_val, self.w_kc, q_nope_scale, self.w_scale, torch.bfloat16
             )
         elif _amx_parallel:
-            bmm_out = torch.empty(
+            q_nope_out = torch.empty(
                 (q_nope.shape[0], self.num_heads * self.kv_lora_rank),
                 dtype=q_nope.dtype,
                 device=q_nope.device,
             ).view(q_nope.shape[0], self.num_heads, self.kv_lora_rank).transpose(0, 1)
-            print(f"Shape: {q_nope.shape} {self.w_kd.shape} {self.num_heads} {self.kv_lora_rank}")
             torch.ops.sgl_kernel.bmm_cpu(
-                bmm_out,
+                q_nope_out,
                 q_nope.transpose(0, 1),
                 self.w_kd,
                 True,
