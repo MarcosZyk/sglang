@@ -2677,10 +2677,12 @@ class DeepseekV2ForCausalLM(nn.Module):
             if _is_cpu and _is_cpu_amx_available and w.dtype == torch.float8_e4m3fn:
                 self_attn.w_kd = (
                     self_attn.w_kd.to(torch.bfloat16) * self_attn.w_scale
-                ).contiguous()
+                )
                 self_attn.w_vd = (
                     self_attn.w_vd.to(torch.bfloat16) * self_attn.w_scale
-                ).contiguous()
+                )
+            self_attn.w_kd = self_attn.w_kd.contiguous()
+            self_attn.w_vd = self_attn.w_vd.contiguous()
         else:
             num_tiles_k = self_attn.qk_nope_head_dim // weight_block_size[1]
             num_tiles_n = self_attn.v_head_dim // weight_block_size[0]
