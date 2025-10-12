@@ -2658,10 +2658,10 @@ class DeepseekV2ForCausalLM(nn.Module):
         ).split([self_attn.qk_nope_head_dim, self_attn.v_head_dim], dim=1)
         if not use_deep_gemm_bmm:
             self_attn.w_kd = bind_or_assign(
-                self_attn.w_kd, w_kd.transpose(1, 2).contiguous()
+                self_attn.w_kd, w_kd.transpose(1, 2).contiguous().transpose(1, 2)
             )
             self_attn.w_vd = bind_or_assign(
-                self_attn.w_vd, w_vd.transpose(1, 2).contiguous().transpose(1, 2)
+                self_attn.w_vd, w_vd.contiguous().transpose(1, 2)
             )
             if (
                 hasattr(self_attn.kv_d_proj, "weight_scale")
@@ -2680,8 +2680,9 @@ class DeepseekV2ForCausalLM(nn.Module):
                 self_attn.w_vd = (
                     self_attn.w_vd.to(torch.bfloat16) * self_attn.w_scale
                 )
-            self_attn.w_kd = self_attn.w_kd.contiguous()
-            self_attn.w_vd = self_attn.w_vd.contiguous()
+            if _amx_parallel:
+                self_attn.w_kd = self_attn.w_kd.transpose(1, 2).contiguous()
+                self_attn.w_vd = self_attn.w_vd.transpose(1, 2).contiguous()
         else:
             num_tiles_k = self_attn.qk_nope_head_dim // weight_block_size[1]
             num_tiles_n = self_attn.v_head_dim // weight_block_size[0]
