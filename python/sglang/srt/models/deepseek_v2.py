@@ -1360,7 +1360,6 @@ class DeepseekV2AttentionMLA(nn.Module):
                 True,
                 None
             )
-            q_nope_out = bmm_out.transpose(0, 1)
         else:
             q_nope_out = torch.bmm(q_nope.transpose(0, 1), self.w_kc)
 
