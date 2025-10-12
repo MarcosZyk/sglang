@@ -853,8 +853,8 @@ class DeepseekV2AttentionMLA(nn.Module):
                     tp_size=attn_tp_size,
                 )
                 self.k_b_proj = ReplicatedLinear(
-                    self.qk_nope_head_dim,
-                    self.num_heads * self.kv_lora_rank,
+                    self.kv_lora_rank,
+                    self.num_heads * self.qk_nope_head_dim,
                     bias=False,
                     quant_config=quant_config,
                     prefix=add_prefix("k_b_proj", prefix),
