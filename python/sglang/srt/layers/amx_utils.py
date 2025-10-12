@@ -84,5 +84,3 @@ class PackWeightMethod:
         _amx_process_weight_after_loading(
             module, self.weight_names, self.transpose_dims
         )
-        if self.weight_names == ["w_kc", "w_vc", "w_kd", "w_vd"]:
-            logger.info(f"Contiguous weight {module.w_kc} {module.w_vc} {module.w_kd} {module.w_vd}")
