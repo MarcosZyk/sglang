@@ -1352,6 +1352,7 @@ class DeepseekV2AttentionMLA(nn.Module):
                 dtype=q_nope.dtype,
                 device=q_nope.device,
             ).view(q_nope.shape[0], self.num_heads, self.kv_lora_rank).transpose(0, 1)
+            print(f"Shape: {q_nope.shape} {self.w_kd.shape} {self.num_heads} {self.kv_lora_rank}")
             torch.ops.sgl_kernel.bmm_cpu(
                 bmm_out,
                 q_nope.transpose(0, 1),
@@ -1359,7 +1360,7 @@ class DeepseekV2AttentionMLA(nn.Module):
                 True,
                 None
             )
-            q_nope_out = bmm_out
+            q_nope_out = bmm_out.transpose(0, 1)
         else:
             q_nope_out = torch.bmm(q_nope.transpose(0, 1), self.w_kc)
 
