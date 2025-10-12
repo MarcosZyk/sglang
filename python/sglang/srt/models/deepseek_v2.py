@@ -1352,7 +1352,6 @@ class DeepseekV2AttentionMLA(nn.Module):
                 dtype=q_nope.dtype,
                 device=q_nope.device,
             ).view(q_nope.shape[0], self.num_heads, self.kv_lora_rank).transpose(0, 1)
-            logger.info(f"Contiguous: {q_nope.is_contiguous()} {self.w_kd.is_contiguous()}")
             torch.ops.sgl_kernel.bmm_cpu(
                 bmm_out,
                 q_nope.transpose(0, 1),
@@ -2682,7 +2681,6 @@ class DeepseekV2ForCausalLM(nn.Module):
                 self_attn.w_vd = (
                     self_attn.w_vd.to(torch.bfloat16) * self_attn.w_scale
                 )
-            logger.info(f"Contiguous: {self_attn.w_kd.is_contiguous()} {self_attn.w_vd.is_contiguous()}")
         else:
             num_tiles_k = self_attn.qk_nope_head_dim // weight_block_size[1]
             num_tiles_n = self_attn.v_head_dim // weight_block_size[0]
