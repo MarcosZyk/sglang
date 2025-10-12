@@ -2682,7 +2682,7 @@ class DeepseekV2ForCausalLM(nn.Module):
                 self_attn.w_vd = (
                     self_attn.w_vd.to(torch.bfloat16) * self_attn.w_scale
                 )
-            logger.info(f"Contiguous: {self.w_kd.is_contiguous()} {self.w_vd.is_contiguous()}")
+            logger.info(f"Contiguous: {self_attn.w_kd.is_contiguous()} {self_attn.w_vd.is_contiguous()}")
         else:
             num_tiles_k = self_attn.qk_nope_head_dim // weight_block_size[1]
             num_tiles_n = self_attn.v_head_dim // weight_block_size[0]
