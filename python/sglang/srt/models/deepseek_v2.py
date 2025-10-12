@@ -1347,6 +1347,9 @@ class DeepseekV2AttentionMLA(nn.Module):
                 q_nope_val, self.w_kc, q_nope_scale, self.w_scale, torch.bfloat16
             )
         elif _amx_parallel:
+            logger.info(f"Q type: {q_nope.dtype}")
+            q_nope_out = torch.bmm(q_nope.transpose(0, 1), self.w_kc.transpose(1, 2))
+            logger.info(f"Q out type: {q_nope_out.dtype}")
             q_nope_out = torch.empty(
                 (q_nope.shape[0], self.num_heads * self.kv_lora_rank),
                 dtype=q_nope.dtype,
