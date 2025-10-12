@@ -1347,7 +1347,19 @@ class DeepseekV2AttentionMLA(nn.Module):
                 q_nope_val, self.w_kc, q_nope_scale, self.w_scale, torch.bfloat16
             )
         elif _amx_parallel:
-            q_nope_out = torch.bmm(q_nope.transpose(0, 1), self.w_kd)
+            bmm_out = torch.empty(
+                (q_nope.shape[0], self.num_heads * self.kv_lora_rank),
+                dtype=q_nope.dtype,
+                device=q_nope.device,
+            ).view(q_nope.shape[0], self.num_heads, self.kv_lora_rank).transpose(0, 1)
+            torch.ops.sgl_kernel.bmm_cpu(
+                bmm_out,
+                q_nope.transpose(0, 1),
+                self.w_kd,
+                True,
+                None
+            )
+            q_nope_out = bmm_out
         else:
             q_nope_out = torch.bmm(q_nope.transpose(0, 1), self.w_kc)
 
@@ -1463,12 +1475,14 @@ class DeepseekV2AttentionMLA(nn.Module):
                     dtype=attn_output.dtype,
                     device=attn_output.device,
                 )
-                torch.bmm(
-                    attn_output.transpose(0, 1),
-                    self.w_vd,
-                    out=attn_bmm_output.view(
+                torch.ops.sgl_kernel.bmm_cpu(
+                    attn_bmm_output.view(
                         -1, self.num_heads, self.v_head_dim
                     ).transpose(0, 1),
+                    attn_output.transpose(0, 1),
+                    self.w_vd,
+                    True,  # is_vnni
+                    None,  # scale
                 )
             else:
                 # Deepseek R1/V3
@@ -1477,12 +1491,14 @@ class DeepseekV2AttentionMLA(nn.Module):
                     dtype=attn_output.dtype,
                     device=attn_output.device,
                 )
-                torch.bmm(
-                    attn_output.transpose(0, 1),
-                    self.w_vd,
-                    out=attn_bmm_output.view(
+                torch.ops.sgl_kernel.bmm_cpu(
+                    attn_bmm_output.view(
                         -1, self.num_heads, self.v_head_dim // get_attention_tp_size()
                     ).transpose(0, 1),
+                    attn_output.transpose(0, 1),
+                    self.w_vd,
+                    True,  # is_vnni
+                    None,  # scale
                 )
         else:
             attn_bmm_output = torch.empty(
