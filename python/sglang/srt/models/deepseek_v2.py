@@ -1352,6 +1352,7 @@ class DeepseekV2AttentionMLA(nn.Module):
                 dtype=q_nope.dtype,
                 device=q_nope.device,
             ).view(q_nope.shape[0], self.num_heads, self.kv_lora_rank).transpose(0, 1)
+            logger.info(f"Contiguous: {q_nope.is_contiguous()} {self.w_kd.is_contiguous()}")
             torch.ops.sgl_kernel.bmm_cpu(
                 bmm_out,
                 q_nope.transpose(0, 1),
