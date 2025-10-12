@@ -8,7 +8,7 @@ python3 -m sglang.launch_server \
     --mem-fraction-static 0.1 \
     --disable-radix-cache \
     --disable-overlap-schedule \
-    --model-path /sgl-workspace/models/deepseek-v3 \
+    --model-path /sgl-workspace/models/deepseek-r1 \
     --tp 2 \
     --dist-init-addr 127.0.0.1:20000 \
     --host 0.0.0.0 --port $HOST_PORT \
