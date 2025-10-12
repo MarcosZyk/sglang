@@ -82,6 +82,8 @@ class PackWeightMethod:
 
     def process_weights_after_loading(self, module) -> None:
         logger.info(f"Apply quant method: {self.weight_names}")
+        import traceback
+        traceback.print_stack()
         _amx_process_weight_after_loading(
             module, self.weight_names, self.transpose_dims
         )
