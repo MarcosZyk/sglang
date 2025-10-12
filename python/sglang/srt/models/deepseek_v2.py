@@ -2685,9 +2685,6 @@ class DeepseekV2ForCausalLM(nn.Module):
                 self_attn.w_vd = (
                     self_attn.w_vd.to(torch.bfloat16) * self_attn.w_scale
                 )
-            # if _amx_parallel:
-            #     self_attn.w_kd = self_attn.w_kd.transpose(1, 2).contiguous()
-            #     self_attn.w_vd = self_attn.w_vd.transpose(1, 2).contiguous()
         else:
             num_tiles_k = self_attn.qk_nope_head_dim // weight_block_size[1]
             num_tiles_n = self_attn.v_head_dim // weight_block_size[0]
@@ -2782,7 +2779,7 @@ class DeepseekV2ForCausalLM(nn.Module):
         if module_name == "k_b_proj":
             w_d = w.unflatten(0, (-1, self_attn.qk_nope_head_dim))
             self_attn.w_kd = bind_or_assign(
-                self_attn.w_kd, w_d.contiguous().transpose(1, 2)
+                self_attn.w_kd, w_d.transpose(1, 2).contiguous().transpose(1, 2)
             )
             # TODO: remove this after adding FP8 support in bmm cpu kernel
             if _is_cpu and _is_cpu_amx_available and w.dtype == torch.float8_e4m3fn:
@@ -2792,7 +2789,7 @@ class DeepseekV2ForCausalLM(nn.Module):
         elif module_name == "v_b_proj":
             w_d = w.unflatten(0, (-1, self_attn.v_head_dim // get_attention_tp_size()))
             self_attn.w_vd = bind_or_assign(
-                self_attn.w_vd, w_d.transpose(1, 2).contiguous().transpose(1, 2)
+                self_attn.w_vd, w_d.contiguous().transpose(1, 2)
             )
             # TODO: remove this after adding FP8 support in bmm cpu kernel
             if _is_cpu and _is_cpu_amx_available and w.dtype == torch.float8_e4m3fn:
