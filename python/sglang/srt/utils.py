@@ -2687,11 +2687,14 @@ def get_cpu_ids_by_node():
 
 
 def is_shm_available(dtype, world_size, local_size):
+    # return false for testing the distributed CPU setting.
+    use_amx_default_allreduce = os.getenv("SGLANG_USE_AMX_DEFAULT_ALLREDUCE", "0")
     return (
         cpu_has_amx_support()
         and dtype in [torch.bfloat16, torch.float]
         and world_size >= 1
         and world_size == local_size
+        and use_amx_default_allreduce == "0"
     )
 
 
