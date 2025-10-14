@@ -369,6 +369,8 @@ class GroupCoordinator:
                 self.cpu_group, 1 << 22, 6
             )
 
+        self.is_shm_amx_available = None
+
     def __repr__(self):
         return (
             f"ranks={self.ranks} rank={self.rank} local_rank={self.local_rank} use_pynccl={self.use_pynccl} "
@@ -491,8 +493,17 @@ class GroupCoordinator:
             return input_
 
         if input_.is_cpu:
-            if is_shm_available(input_.dtype, self.world_size, self.local_size):
-                torch.ops.sgl_kernel.shm_allreduce(input_, REDUCE_OP_SUM)
+            if self.is_shm_amx_available is None:
+                self.is_shm_amx_available = is_shm_available(
+                    input_.dtype, self.world_size, self.local_size
+                )
+                logger.info(f"[all_reduce] cache is_shm_amx_available to {self.is_shm_amx_available}")
+            if self.is_shm_amx_available:
+                # logger.info(f"[all_reduce] cpu with shm using torch.distributed.all_reduce for CPU tensor, with input:{input_} "
+                #             f"and reduce_op:{REDUCE_OP_SUM}")
+                torch.ops.sgl_kernel.shm_allreduce(
+                    input_, torch.distributed.ReduceOp.SUM
+                )
             else:
                 torch.distributed.all_reduce(input_, group=self.device_group)
             return input_
@@ -697,9 +708,14 @@ class GroupCoordinator:
         )
 
         # All-gather.
-        if input_.is_cpu and is_shm_available(
-            input_.dtype, self.world_size, self.local_size
-        ):
+        if self.is_shm_amx_available is None:
+            self.is_shm_amx_available = is_shm_available(
+                input_.dtype, self.world_size, self.local_size
+            )
+            logger.info(f"[all_gather] cache is_shm_amx_available to {self.is_shm_amx_available}")
+        if input_.is_cpu and self.is_shm_amx_available:
+            # logger.info(f"[all_gather] cpu with shm using shm_allgather for CPU tensor with input:{input_} "
+            #             f"and the dim:{dim}")
             return torch.ops.sgl_kernel.shm_allgather(input_, dim)
 
         if input_.is_cpu:

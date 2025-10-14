@@ -1816,6 +1816,7 @@ class ModelRunner:
 
     def init_threads_binding(self):
         omp_cpuids = os.environ.get("SGLANG_CPU_OMP_THREADS_BIND", "all")
+        use_amx_default_allreduce = os.getenv("SGLANG_USE_AMX_DEFAULT_ALLREDUCE", "0")
         cpu_ids_by_node = get_cpu_ids_by_node()
         n_numa_node = len(cpu_ids_by_node)
         if omp_cpuids == "all":
@@ -1834,6 +1835,8 @@ class ModelRunner:
                     f"Detected the current machine has {n_numa_node} numa nodes available, but tp_size is set to {self.tp_size}, so only {self.tp_size} numa nodes are used."
                 )
             self.local_omp_cpuid = cpu_ids_by_node[self.tp_rank]
+        elif use_amx_default_allreduce == "1":
+            self.local_omp_cpuid = omp_cpuids.strip()
         else:
             threads_bind_list = omp_cpuids.split("|")
             assert self.tp_size == len(threads_bind_list), (
@@ -1847,6 +1850,7 @@ class ModelRunner:
                     f"in this case the available memory amount of each rank cannot be determined in prior. "
                     f"Please set proper `--max-total-tokens` to avoid the out-of-memory error."
                 )
+        logger.info(f"[init_threads_binding] tp_rank: {self.tp_rank}, cpu_ids: {self.local_omp_cpuid}, use_amx_default_allreduce: {use_amx_default_allreduce}")
 
     def apply_torch_tp(self):
         logger.info(f"Enabling torch tensor parallelism on {self.tp_size} devices.")
