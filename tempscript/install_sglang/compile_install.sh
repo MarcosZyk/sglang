@@ -2,6 +2,13 @@
 set -euo pipefail
 IFS=$'\n\t'
 
+ENV_NAME="sglamx-dong1"
+PYTHON_VER="3.12"
+
+VER_TORCH=2.7.1
+VER_TORCHVISION=0.22.1
+VER_TRITON=3.3.1
+
 # Small helpers
 log() { printf '\n[%s] %s\n' "$(date +'%Y-%m-%d %H:%M:%S')" "$*"; }
 err() { printf '\n[ERROR %s] %s\n' "$(date +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
@@ -55,8 +62,6 @@ if ! source "$(conda info --base 2>/dev/null)/etc/profile.d/conda.sh" >/dev/null
     exit 2
 fi
 
-ENV_NAME="sglamx-dong1"
-PYTHON_VER="3.12"
 
 log "Creating or reusing conda env: $ENV_NAME (python=$PYTHON_VER)"
 if conda env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
@@ -113,7 +118,9 @@ if [ -n "$BACKUP_PYPROJECT" ] && [ -f "$BACKUP_PYPROJECT" ]; then
     BACKUP_PYPROJECT=""
 fi
 
-#
+run_with_retries "python -m pip install --upgrade --force-reinstall \
+    \"torch==${VER_TORCH}\" \"torchvision==${VER_TORCHVISION}\" \"triton==${VER_TRITON}\" $PIP_INDEX" 4 3 || { err "pip install torch/vision/triton failed"; exit 10; }
+
 # Install sgl-kernel with CPU support
 #
 KERNEL_DIR="sgl-kernel"
