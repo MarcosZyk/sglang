@@ -16,5 +16,5 @@ done
 
 
 python3 -m sglang.bench_serving  --dataset-path /home/dchen/ShareGPT_V3_unfiltered_cleaned_split.json \
-                --dataset-name random --random-input 50 --random-output 50 --num-prompts 1 \
-                --request-rate inf --random-range-ratio 1.0 --max-concurrency 50 --host 127.0.0.1 --port 30010
+                --dataset-name random --random-input 50 --random-output 10 --num-prompts 1 \
+                --request-rate inf --random-range-ratio 1.0 --max-concurrency 50 --host 33.197.201.175 --port 30010

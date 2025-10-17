@@ -9,6 +9,19 @@ VER_TORCH=2.7.1
 VER_TORCHVISION=0.22.1
 VER_TRITON=3.3.1
 
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --env-name) ENV_NAME="$2"; shift 2 ;;
+        --python) PYTHON_VER="$2"; shift 2 ;;
+        --torch) VER_TORCH="$2"; shift 2 ;;
+        --torchvision) VER_TORCHVISION="$2"; shift 2 ;;
+        --triton) VER_TRITON="$2"; shift 2 ;;
+        --pip-index) PIP_INDEX="$2"; shift 2 ;;
+        --help) printf "Usage: %s [--env-name NAME] [--python VER] [--torch VER] [--pip-index URL]\n" "$0"; exit 0 ;;
+        *) break ;;
+    esac
+done
+
 # Small helpers
 log() { printf '\n[%s] %s\n' "$(date +'%Y-%m-%d %H:%M:%S')" "$*"; }
 err() { printf '\n[ERROR %s] %s\n' "$(date +'%Y-%m-%d %H:%M:%S')" "$*" >&2; }
