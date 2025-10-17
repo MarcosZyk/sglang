@@ -94,7 +94,7 @@ modelpath="/root/.cache/modelscope/hub/models/Qwen/Qwen3-32B"
 SGLANG_CPU_OMP_THREADS_BIND='0-39' python3 -m sglang.launch_server --model "$modelpath"  \
     --trust-remote-code --device cpu --disable-overlap-schedule --disable-radix-cache --tp 4 \
     --mem-fraction-static 0.5 --max-total-tokens 63356  --port 30001 --host 33.197.201.175  \
-    --dist-init-addr 33.197.201.175:20000 --nnodes 4 --node-rank 0
+    --dist-init-addr 33.197.201.175:5000 --nnodes 4 --node-rank 0 --trust-remote
 
 
 # rank 0 tp 2:
@@ -104,7 +104,7 @@ export LD_PRELOAD=/root/miniforge3/envs/$condaenv/lib/libiomp5.so:/root/miniforg
 UCX_NET_DEVICES=mlx5_23:1 SGLANG_USE_CPU_ENGINE=1 SGLANG_USE_AMX_DEFAULT_ALLREDUCE=1 SGLANG_CPU_OMP_THREADS_BIND='0-39' \
     python3 -m sglang.launch_server --model /root/.cache/modelscope/hub/models/Qwen/Qwen3-32B  --trust-remote-code \
     --device cpu --disable-overlap-schedule --disable-radix-cache --tp 4 --mem-fraction-static 0.5 --max-total-tokens 63356  \
-    --port 30010 --host 33.197.201.175 --dist-init-addr 33.197.201.175:20000 --nnodes 4 --node-rank 0
+    --port 30010 --host 33.197.201.175 --dist-init-addr 33.197.201.175:5000 --nnodes 4 --node-rank 0 --trust-remote
 
 
 # rank 1 tp 2:
@@ -114,19 +114,19 @@ export LD_PRELOAD=/root/miniforge3/envs/$condaenv/lib/libiomp5.so:/root/miniforg
 UCX_NET_DEVICES=mlx5_22:1 SGLANG_USE_CPU_ENGINE=1 SGLANG_USE_AMX_DEFAULT_ALLREDUCE=1 SGLANG_CPU_OMP_THREADS_BIND='0-39' \
     python3 -m sglang.launch_server --model /root/.cache/modelscope/hub/models/Qwen/Qwen3-32B  --trust-remote-code --device cpu \
     --disable-overlap-schedule --disable-radix-cache --tp 4 --mem-fraction-static 0.5 --max-total-tokens 63356  \
-    --port 30010 --dist-init-addr 33.197.201.175:20000 --nnodes 4 --node-rank 1
+    --port 30010 --dist-init-addr 33.197.201.175:5000 --nnodes 4 --node-rank 1 --trust-remote
 --host 33.197.201.116
 
 # rank 2 tp 2:
 UCX_NET_DEVICES=mlx5_89:1 SGLANG_USE_CPU_ENGINE=1 SGLANG_USE_AMX_DEFAULT_ALLREDUCE=1 SGLANG_CPU_OMP_THREADS_BIND='0-39' \
     python3 -m sglang.launch_server --model /root/.cache/modelscope/hub/models/Qwen/Qwen3-32B  --trust-remote-code --device cpu \
     --disable-overlap-schedule --disable-radix-cache --tp 4 --mem-fraction-static 0.5 --max-total-tokens 63356  \
-    --port 30010 --dist-init-addr 33.197.201.175:20000 --nnodes 4 --node-rank 2
+    --port 30010 --dist-init-addr 33.197.201.175:5000 --nnodes 4 --node-rank 2 --trust-remote
 --host 33.197.201.155
 
 # rank 3 tp 2:
 UCX_NET_DEVICES=mlx5_47:1 SGLANG_USE_CPU_ENGINE=1 SGLANG_USE_AMX_DEFAULT_ALLREDUCE=1 SGLANG_CPU_OMP_THREADS_BIND='0-39' \
     python3 -m sglang.launch_server --model /root/.cache/modelscope/hub/models/Qwen/Qwen3-32B  --trust-remote-code --device cpu \
     --disable-overlap-schedule --disable-radix-cache --tp 4 --mem-fraction-static 0.5 --max-total-tokens 63356  \
-    --port 30010 --dist-init-addr 33.197.201.175:20000 --nnodes 4 --node-rank 3
+    --port 30010 --dist-init-addr 33.197.201.175:5000 --nnodes 4 --node-rank 3 --trust-remote
 --host 33.197.201.149
