@@ -130,3 +130,31 @@ UCX_NET_DEVICES=mlx5_47:1 SGLANG_USE_CPU_ENGINE=1 SGLANG_USE_AMX_DEFAULT_ALLREDU
     --disable-overlap-schedule --disable-radix-cache --tp 4 --mem-fraction-static 0.5 --max-total-tokens 63356  \
     --port 30010 --dist-init-addr 33.197.201.175:5000 --nnodes 4 --node-rank 3 --trust-remote
 --host 33.197.201.149
+
+
+
+
+#### ------------------------------------------------------
+# rank 0 tp 4:
+UCX_NET_DEVICES=mlx5_23:1 
+
+SGLANG_USE_CPU_ENGINE=1 SGLANG_USE_AMX_DEFAULT_ALLREDUCE=1 SGLANG_CPU_OMP_THREADS_BIND='0-39' \
+    python3 -m sglang.launch_server --model /home/dchen/models/qwen3-32b  --trust-remote-code \
+    --device cpu --disable-overlap-schedule --disable-radix-cache --tp 4 --mem-fraction-static 0.5 --max-total-tokens 63356  \
+    --port 30010 --host 33.198.90.160 --dist-init-addr 33.198.90.160:20000 --nnodes 4 --node-rank 0 --trust-remote
+
+SGLANG_USE_CPU_ENGINE=1 SGLANG_USE_AMX_DEFAULT_ALLREDUCE=1 SGLANG_CPU_OMP_THREADS_BIND='48-93' \
+    python3 -m sglang.launch_server --model /home/dchen/models/qwen3-32b  --trust-remote-code \
+    --device cpu --disable-overlap-schedule --disable-radix-cache --tp 4 --mem-fraction-static 0.5 --max-total-tokens 63356  \
+    --port 30020 --host 33.198.90.160 --dist-init-addr 33.198.90.160:20000 --nnodes 4 --node-rank 1 --trust-remote
+
+
+SGLANG_USE_CPU_ENGINE=1 SGLANG_USE_AMX_DEFAULT_ALLREDUCE=1 SGLANG_CPU_OMP_THREADS_BIND='0-39' \
+    python3 -m sglang.launch_server --model /home/dchen/models/qwen3-32b  --trust-remote-code \
+    --device cpu --disable-overlap-schedule --disable-radix-cache --tp 4 --mem-fraction-static 0.5 --max-total-tokens 63356  \
+    --port 30030 --host 33.201.131.171 --dist-init-addr 33.198.90.160:20000 --nnodes 4 --node-rank 2 --trust-remote
+
+SGLANG_USE_CPU_ENGINE=1 SGLANG_USE_AMX_DEFAULT_ALLREDUCE=1 SGLANG_CPU_OMP_THREADS_BIND='48-93' \
+    python3 -m sglang.launch_server --model /home/dchen/models/qwen3-32b  --trust-remote-code \
+    --device cpu --disable-overlap-schedule --disable-radix-cache --tp 4 --mem-fraction-static 0.5 --max-total-tokens 63356  \
+    --port 30040 --host 33.201.131.171 --dist-init-addr 33.198.90.160:20000 --nnodes 4 --node-rank 3 --trust-remote
