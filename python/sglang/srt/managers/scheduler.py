@@ -2794,6 +2794,7 @@ def run_scheduler_process(
     pipe_writer,
     balance_meta: Optional[DPBalanceMeta] = None,
 ):
+    logger.info(f"[run_scheduler_process] Starting scheduler on GPU {gpu_id} with TP rank {tp_rank}, EP rank {moe_ep_rank}, PP rank {pp_rank}, DP rank {dp_rank}")
     if server_args.enable_trace:
         process_tracing_init(server_args.oltp_traces_endpoint, "sglang")
         if server_args.disaggregation_mode == "null":
@@ -2813,13 +2814,13 @@ def run_scheduler_process(
         prefix += f" EP{moe_ep_rank}"
     if server_args.pp_size > 1:
         prefix += f" PP{pp_rank}"
-
+    logger.info(f"[run_scheduler_process] Scheduler prefix: {prefix}")
     # Config the process
     setproctitle.setproctitle(f"sglang::scheduler{prefix.replace(' ', '_')}")
     faulthandler.enable()
     kill_itself_when_parent_died()
     parent_process = psutil.Process().parent()
-
+    logger.info(f"[run_scheduler_process] Parent process PID: {parent_process.pid}")
     # [For Router] if env var "SGLANG_DP_RANK" exist, set dp_rank to the value of the env var
     if dp_rank is None and "SGLANG_DP_RANK" in os.environ:
         dp_rank = int(os.environ["SGLANG_DP_RANK"])
@@ -2827,13 +2828,14 @@ def run_scheduler_process(
     # Configure the logger
     configure_logger(server_args, prefix=prefix)
     suppress_other_loggers()
-
+    logger.info(f"[run_scheduler_process] Logger configured.")
     # Set cpu affinity to this gpu process
     if get_bool_env_var("SGLANG_SET_CPU_AFFINITY"):
         set_gpu_proc_affinity(server_args.tp_size, server_args.nnodes, gpu_id)
 
     # Create a scheduler and run the event loop
     try:
+        logger.info(f"[run_scheduler_process] Creating Scheduler instance.")
         scheduler = Scheduler(
             server_args,
             port_args,
@@ -2844,6 +2846,7 @@ def run_scheduler_process(
             dp_rank,
             dp_balance_meta=balance_meta,
         )
+        logger.info(f"[run_scheduler_process] Scheduler instance created. start to send ready signal.")
         pipe_writer.send(
             {
                 "status": "ready",
@@ -2851,6 +2854,7 @@ def run_scheduler_process(
                 "max_req_input_len": scheduler.max_req_input_len,
             }
         )
+        logger.info(f"[run_scheduler_process] Ready signal sent. Starting event loop.")
 
         disaggregation_mode: DisaggregationMode = scheduler.disaggregation_mode
         if disaggregation_mode == DisaggregationMode.NULL:

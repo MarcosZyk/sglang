@@ -773,7 +773,9 @@ def _launch_subprocesses(
     )
 
     scheduler_procs = []
+    logger.info(f"Launching scheduler processes with dp size {server_args.dp_size}")
     if server_args.dp_size == 1:
+        # logger.info(f"launching dp size 1 schedulers")
         memory_saver_adapter = TorchMemorySaverAdapter.create(
             enable=server_args.enable_memory_saver
         )
@@ -801,6 +803,7 @@ def _launch_subprocesses(
                     + (tp_rank % tp_size_per_node) * server_args.gpu_id_step
                 )
                 moe_ep_rank = tp_rank // (server_args.tp_size // server_args.ep_size)
+                logger.info(f"Launching scheduler proc on GPU {gpu_id} for tp rank {tp_rank}, pp rank {pp_rank}, moe ep rank {moe_ep_rank}")
                 proc = mp.Process(
                     target=run_scheduler_process,
                     args=(
@@ -822,6 +825,7 @@ def _launch_subprocesses(
                 scheduler_pipe_readers.append(reader)
     else:
         # Launch the data parallel controller
+        # logger.info(f"launching data parallel controller for dp size {server_args.dp_size}")
         reader, writer = mp.Pipe(duplex=False)
         scheduler_pipe_readers = [reader]
         proc = mp.Process(
@@ -832,12 +836,16 @@ def _launch_subprocesses(
         scheduler_procs.append(proc)
 
     if server_args.node_rank >= 1:
+        logger.info(f"Node rank {server_args.node_rank} waiting for ready signal.")
         # In multi-node cases, non-zero rank nodes do not need to run tokenizer or detokenizer,
         # so they can just wait here.
-
+        index1 = 0
         for reader in scheduler_pipe_readers:
+            logger.info(f"Node rank {server_args.node_rank} waiting for idx {index1}.")
             data = reader.recv()
             assert data["status"] == "ready"
+            logger.info(f"Node rank {server_args.node_rank} received ready signal from idx {index1}.")
+            index1 += 1
 
         if os.getenv("SGLANG_BLOCK_NONZERO_RANK_CHILDREN") == "0":
             # When using `Engine` as a Python API, we don't want to block here.
