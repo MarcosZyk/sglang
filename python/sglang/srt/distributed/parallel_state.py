@@ -505,6 +505,7 @@ class GroupCoordinator:
                     input_, torch.distributed.ReduceOp.SUM
                 )
             else:
+                # logger.info(f"Device group for all-reduce {self.device_group.group_name} {input_.shape}")
                 torch.distributed.all_reduce(input_, group=self.device_group)
             return input_
 
