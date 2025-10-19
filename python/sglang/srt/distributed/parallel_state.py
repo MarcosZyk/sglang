@@ -506,6 +506,7 @@ class GroupCoordinator:
                 )
             else:
                 # logger.info(f"Device group for all-reduce {self.device_group.group_name} {input_.shape}")
+                torch.distributed.barrier(group=self.device_group)
                 torch.distributed.all_reduce(input_, group=self.device_group)
             return input_
 
