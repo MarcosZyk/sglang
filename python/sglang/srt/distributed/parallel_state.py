@@ -735,6 +735,47 @@ class GroupCoordinator:
         )
         return output_tensor
 
+    def amx_all_gather(self, input_: torch.Tensor,):
+        world_size = self.world_size
+        # Bypass the function if we are using only 1 GPU.
+        if world_size == 1:
+            return input_
+
+        input_shape = input_.shape
+        # NOTE: we have to use concat-style all-gather here,
+        # stack-style all-gather has compatibility issues with
+        # torch.compile . see https://github.com/pytorch/pytorch/issues/138795
+        output_shape = (input_shape[0] * world_size,) + input_shape[1:]
+        # Allocate output tensor.
+        output_tensor = torch.empty(
+            output_shape, dtype=input_.dtype, device=input_.device
+        )
+
+        # All-gather.
+        torch.distributed.all_gather_into_tensor(
+            output_tensor, input_, group=self.device_group
+        )
+        return output_tensor
+
+    def amx_all_to_all(self, input_: torch.Tensor,):
+        world_size = self.world_size
+        # Bypass the function if we are using only 1 GPU.
+        if world_size == 1:
+            return input_
+
+        input_shape = input_.shape
+        output_shape = input_shape
+        # Allocate output tensor.
+        output_tensor = torch.empty(
+            output_shape, dtype=input_.dtype, device=input_.device
+        )
+
+        # All-to-all.
+        torch.distributed.all_to_all_single(
+            output_tensor, input_, group=self.device_group
+        )
+        return output_tensor
+
     def all_gatherv(
         self,
         input_: Union[torch.Tensor, List[torch.Tensor]],

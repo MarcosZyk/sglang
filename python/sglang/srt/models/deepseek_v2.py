@@ -34,7 +34,8 @@ from sglang.srt.distributed import (
     get_tensor_model_parallel_world_size,
     parallel_state,
     tensor_model_parallel_all_reduce,
-    tensor_model_parallel_all_gather,
+    parallel_amx_all_gather,
+    parallel_amx_all_to_all,
 )
 from sglang.srt.distributed.device_communicators.pynccl_allocator import (
     use_symmetric_memory,
@@ -224,10 +225,7 @@ def _dispatch_mla_subtype(attn, forward_batch):
             return AttnForwardMethod.MLA
     else:
         if hasattr(attn, "fused_qkv_a_proj_with_mqa") and use_intel_amx_backend(attn):
-            if _amx_parallel:
-                return AttnForwardMethod.MLA
-            else:
-                return AttnForwardMethod.MLA_FUSED_ROPE_CPU
+            return AttnForwardMethod.MLA_FUSED_ROPE_CPU
         else:
             return AttnForwardMethod.MLA
 
@@ -1554,9 +1552,8 @@ class DeepseekV2AttentionMLA(nn.Module):
             q_pe, k_pe = self.rotary_emb(positions, q_pe, k_pe)
 
         if _amx_parallel:
-            q = torch.cat([q_nope_out, q_pe], dim=-1).flatten()
-            q = (tensor_model_parallel_all_gather(q)
-                                .view(q_nope.shape[0], self.num_heads, self.kv_lora_rank + self.qk_rope_head_dim))
+            q = torch.cat([q_nope_out, q_pe], dim=-1).transpose(0, 1)
+            q = parallel_amx_all_gather(q).transpose(0, 1)
 
         return q_pe, k_pe, q_nope_out, k_nope, forward_batch, zero_allocator, positions, q
 
@@ -1608,17 +1605,14 @@ class DeepseekV2AttentionMLA(nn.Module):
 
                 attn_logits = attn_logits[:, :, :1, :]
 
-                flat_logits = attn_logits.flatten()
-                gathered_logits = tensor_model_parallel_all_gather(flat_logits).view(
-                    -1,
-                    attn_logits.shape[1],
-                    1,  # * rank_size
-                    attn_logits.shape[3],
-                )
-                attn_logits = torch.cat(gathered_logits.split(attn_logits.shape[0], dim=0), dim=2)
+                attn_logits = (parallel_amx_all_to_all(attn_logits.transpose(0, 1).contiguous())
+                               .view(get_attention_tp_size(), self.num_local_heads, attn_logits.shape[0], 1, attn_logits.shape[3])
+                               .permute([2, 1, 0, 3, 4])
+                               .view(attn_logits.shape[0], self.num_local_heads, get_attention_tp_size(), attn_logits.shape[3])
+                               .contiguous())
 
                 attn_output = torch.empty(
-                    (attn_logits.shape[0], self.num_heads, self.kv_lora_rank),
+                    (attn_logits.shape[0], self.num_local_heads, self.kv_lora_rank),
                     dtype=attn_output.dtype,
                     device=attn_output.device,
                 )
@@ -1698,15 +1692,11 @@ class DeepseekV2AttentionMLA(nn.Module):
                 device=attn_output.device,
             )
 
-            local_rank = get_attention_tp_rank()
-            start_head = self.num_local_heads * local_rank
-            end_head = self.num_local_heads * (local_rank + 1)
-
             torch.ops.sgl_kernel.bmm_cpu(
                 attn_bmm_output.view(
                     -1, self.num_local_heads, self.v_head_dim
                 ).transpose(0, 1),
-                attn_output[:, start_head:end_head, :].transpose(0, 1),
+                attn_output.transpose(0, 1),
                 self.w_vd,
                 True,  # is_vnni
                 None,  # scale
@@ -1891,6 +1881,10 @@ class DeepseekV2AttentionMLA(nn.Module):
                 self.qk_rope_head_dim,
             )
         )
+
+        if _amx_parallel:
+            q_input = parallel_amx_all_gather(q_input.transpose(0, 1)).transpose(0, 1)
+
         return (q_input, k_input, v_input, forward_batch, zero_allocator)
 
     def forward_absorb_fused_mla_rope_core(
@@ -1974,7 +1968,34 @@ class DeepseekV2AttentionMLA(nn.Module):
         ), "forward_absorb_fused_mla_rope_cpu_core requires q_lora_rank is not None and use_intel_amx_backend"
 
         attn_output = self.attn_mqa(q_input, k_input, v_input, forward_batch)
-        attn_output = attn_output.view(-1, self.num_local_heads, self.kv_lora_rank)
+
+        if not _amx_parallel:
+            attn_output = attn_output.view(-1, self.num_local_heads, self.kv_lora_rank)
+        else:
+            attn_logits, _ = forward_batch.attn_backend.forward_metadata
+
+            attn_logits = attn_logits[:, :, :1, :]
+
+            attn_logits = (parallel_amx_all_to_all(attn_logits.transpose(0, 1).contiguous())
+                           .view(get_attention_tp_size(), self.num_local_heads, attn_logits.shape[0], 1,
+                                 attn_logits.shape[3])
+                           .permute([2, 1, 0, 3, 4])
+                           .view(attn_logits.shape[0], self.num_local_heads, get_attention_tp_size(),
+                                 attn_logits.shape[3])
+                           .contiguous())
+
+            attn_output = torch.empty(
+                (attn_logits.shape[0], self.num_local_heads, self.kv_lora_rank),
+                dtype=attn_output.dtype,
+                device=attn_output.device,
+            )
+
+            torch.ops.sgl_kernel.decode_merge_attention_sp_cpu_v2(
+                attn_output,
+                attn_logits,
+                get_attention_tp_size(),
+            )
+
 
         # [Note] Align shapes of bmm inputs.
         # Shapes of inputs:

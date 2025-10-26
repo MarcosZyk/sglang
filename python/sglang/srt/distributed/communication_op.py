@@ -33,3 +33,10 @@ def broadcast_tensor_dict(
     if not torch.distributed.is_initialized():
         return tensor_dict
     return get_tp_group().broadcast_tensor_dict(tensor_dict, src)
+
+
+def parallel_amx_all_gather(input_: torch.Tensor,) -> torch.Tensor:
+    return get_tp_group().amx_all_gather(input_)
+
+def parallel_amx_all_to_all(input_: torch.Tensor,) -> torch.Tensor:
+    return get_tp_group().amx_all_to_all(input_)
