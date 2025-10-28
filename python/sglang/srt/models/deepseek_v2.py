@@ -1883,7 +1883,7 @@ class DeepseekV2AttentionMLA(nn.Module):
         )
 
         if _amx_parallel:
-            q_input = parallel_amx_all_gather(q_input.transpose(0, 1)).transpose(0, 1)
+            q_input = parallel_amx_all_gather(q_input.transpose(0, 1).contiguous()).transpose(0, 1)
 
         return (q_input, k_input, v_input, forward_batch, zero_allocator)
 
