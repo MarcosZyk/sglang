@@ -8,6 +8,7 @@ python3 -m sglang.launch_server \
     --mem-fraction-static 0.048 \
     --disable-radix-cache \
     --disable-overlap-schedule \
+    --chunked-prefill-size=-1 \
     --model-path /sgl-workspace/models/DeepSeek-V2-Lite-Chat \
     --enable-torch-compile \
     --torch-compile-max-bs 4 \
