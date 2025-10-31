@@ -1055,7 +1055,9 @@ void decode_attention_mla_kernel_impl(
   const int64_t BLOCK_H = batches == 1 ? 6 : (batches > 16 ? 22 : 11);
 
   // strides
-  const int64_t l_stride0 = num_heads * num_kv_splits * (head_size_v + 2);
+  // const int64_t l_stride0 = num_heads * num_kv_splits * (head_size_v + 2);
+  // dim: head_num, batchs, num_kv_splits, head_size_v + 2
+  const int64_t l_stride0 = batches * num_kv_splits * (head_size_v + 2);
   const int64_t l_stride1 = num_kv_splits * (head_size_v + 2);
   const int64_t l_stride2 = head_size_v + 2;
 
@@ -1107,9 +1109,9 @@ void decode_attention_mla_kernel_impl(
       const int64_t kv_end = std::min(kv_start + kv_block_length, seq_len_kv);
 
       // get v_prime, and init to zero
-      float* __restrict__ v_prime = attn_logits + bs * l_stride0 + h_start * l_stride1 + kv_id * l_stride2;
+      float* __restrict__ v_prime = attn_logits + h_start * l_stride0 + bs * l_stride1 + kv_id * l_stride2;
       for (int64_t h = 0; h < h_size; ++h) {
-        fill_stub(v_prime + h * l_stride1, 0.f, head_size_v + 2);
+        fill_stub(v_prime + h * l_stride0, 0.f, head_size_v + 2);
       }
 
       if (kv_start >= seq_len_kv) {
@@ -1180,8 +1182,8 @@ void decode_attention_mla_kernel_impl(
           float scale_m = m_delta[h];
           at::vec::map<float>(
               [scale_m](Vec x) { return x * Vec(scale_m); },
-              v_prime + h * l_stride1,
-              v_prime + h * l_stride1,
+              v_prime + h * l_stride0,
+              v_prime + h * l_stride0,
               head_size_v);
 
           // pad s_delta with 0 first and then convert to scalar_t
@@ -1196,7 +1198,7 @@ void decode_attention_mla_kernel_impl(
             /* K     */ padded_n_size,  // n_size
             /* lda   */ BLOCK_N,
             /* ldb   */ head_size_v,
-            /* ldc   */ l_stride1,
+            /* ldc   */ l_stride0,
             /* add_C */ true,
             /* A     */ s_delta2,
             /* B     */ Btmp1,
@@ -1211,9 +1213,9 @@ void decode_attention_mla_kernel_impl(
           }
           float s = 1 / s_prime[h];
           at::vec::map<float>(
-              [s](Vec out) { return out * Vec(s); }, v_prime + h * l_stride1, v_prime + h * l_stride1, head_size_v);
-          (v_prime + h * l_stride1)[head_size_v] = m_prime[h] + std::log(s_prime[h]);
-          (v_prime + h * l_stride1)[head_size_v + 1] = 1.f;  // reset flag
+              [s](Vec out) { return out * Vec(s); }, v_prime + h * l_stride0, v_prime + h * l_stride0, head_size_v);
+          (v_prime + h * l_stride0)[head_size_v] = m_prime[h] + std::log(s_prime[h]);
+          (v_prime + h * l_stride0)[head_size_v + 1] = 1.f;  // reset flag
         }
       }
 
@@ -1222,9 +1224,10 @@ void decode_attention_mla_kernel_impl(
     }
     at::native::cpublas::brgemm_release();
   });
-
+  // std::cout << "After brgemm release " << "get the thread num: " << at::get_thread_num() << std::endl;
   decode_accumulate_kv_splits(
       output, attn_logits, batches, num_heads, head_size_v, num_kv_splits, l_stride1, l_stride2);
+  // std::cout << "After decode accumulate " << "get the thread num: " << at::get_thread_num() << std::endl;
 }  // MLA
 
 template <typename scalar_t, typename index_t, int64_t BLOCK_N>
@@ -1458,7 +1461,6 @@ void decode_attention_cpu_v2(
   int64_t head_size = query.size(2);
   int64_t head_size_v = v_buffer.size(2);
 
-  int64_t num_kv_splits = attn_logits.size(2);
 //   std::cout << "decode_attention_cpu: num_seqs=" << num_seqs
 //     << ", max_num_reqs=" << max_num_reqs
 //     << ", max_context_len=" << max_context_len
@@ -1469,10 +1471,10 @@ void decode_attention_cpu_v2(
 //     << ", head_size_v=" << head_size_v
 //     << ", num_kv_splits=" << num_kv_splits
 //     << std::endl;
-
+  int64_t num_kv_splits = attn_logits.size(2);
   CHECK_EQ(loc.numel(), num_seqs);
-  CHECK_EQ(attn_logits.size(0), num_seqs);
-  CHECK_EQ(attn_logits.size(1), num_heads);
+  CHECK_EQ(attn_logits.size(0), num_heads);
+  CHECK_EQ(attn_logits.size(1), num_seqs);
   CHECK_EQ(attn_logits.size(3), head_size_v + 2);
   CHECK_EQ(attn_logits.scalar_type(), at::kFloat);
 
@@ -1515,7 +1517,8 @@ void decode_attention_cpu_v2(
   int num_threads = at::get_num_threads();
   int64_t size_per_thread = is_mla ? BLOCK_N * head_size + BLOCK_N * head_size_v : 0;
   auto buffer = at::empty({num_threads, size_per_thread}, k_buffer.options());
-
+//   std::cout << "decode_attention_cpu_v2: num_threads=" << num_threads
+//     << ", size_per_thread=" << size_per_thread << std::endl;
   AT_DISPATCH_REDUCED_FLOATING_TYPES(query.scalar_type(), "decode_attention_kernel", [&] {
     AT_DISPATCH_INDEX_TYPES(index_dtype, "decode_attention_indices", [&] {
       // update the kv buffer
@@ -1700,11 +1703,11 @@ void decode_merge_attention_sp_cpu_v2(
   CHECK_DIM(3, output);
   CHECK_DIM(4, attn_logits);
 
-  int64_t num_seqs = attn_logits.size(0);
-  int64_t num_heads = attn_logits.size(1);
+  int64_t num_heads = attn_logits.size(0);
+  int64_t num_seqs = attn_logits.size(1);
   // attn_logits layout: [..., head_size_v(values), header, flag]
   int64_t head_size_v = attn_logits.size(3) - 2;
-  int64_t l_stride1 = attn_logits.size(2) * (attn_logits.size(3));
+  int64_t l_stride1 = attn_logits.size(2) * attn_logits.size(3);
   int64_t l_stride2 = attn_logits.size(3);
 
   AT_DISPATCH_REDUCED_FLOATING_TYPES(output.scalar_type(), "decode_merge_kv_splits_sp", [&] {
