@@ -58,22 +58,36 @@ class IntelAMXAttnBackend(AttentionBackend):
         """Init the metadata for a forward pass."""
 
         bs = forward_batch.batch_size
-        attn_logits = torch.zeros(
-            (
-                bs,
-                self.num_head,
-                # 8,  # self.num_kv_splits,
-                self.num_kv_splits if _amx_parallel else 8,
-                self.v_head_dim + (2 if _amx_parallel else 1),
-            ),
-            dtype=torch.float32,
-            device=self.device,
-        )
+        if forward_batch.forward_mode.is_decode_or_idle() and _amx_parallel:
+            attn_logits = torch.zeros(
+                (
+                    self.num_head,
+                    bs,
+                    self.num_kv_splits,
+                    self.v_head_dim + 2,
+                ),
+                dtype=torch.float32,
+                device=self.device,
+            )
+        else:
+            attn_logits = torch.zeros(
+                (
+                    bs,
+                    self.num_head,
+                    8,  # self.num_kv_splits,
+                    self.v_head_dim + 1,
+                ),
+                dtype=torch.float32,
+                device=self.device,
+            )
+
         if forward_batch.forward_mode.is_decode_or_idle():
             max_extend_len = None
         else:
             max_extend_len = torch.max(forward_batch.extend_seq_lens).item()
+
         self.forward_metadata = (attn_logits, max_extend_len)
+
 
     def get_graph_seq_len_fill_value(self):
         return 1

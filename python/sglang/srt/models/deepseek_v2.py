@@ -1605,14 +1605,24 @@ class DeepseekV2AttentionMLA(nn.Module):
 
                 attn_logits = attn_logits[:, :, :1, :]
 
-                attn_logits = (parallel_amx_all_to_all(attn_logits.transpose(0, 1).contiguous())
-                               .view(get_attention_tp_size(), self.num_local_heads, attn_logits.shape[0], 1, attn_logits.shape[3])
-                               .permute([2, 1, 0, 3, 4])
-                               .view(attn_logits.shape[0], self.num_local_heads, get_attention_tp_size(), attn_logits.shape[3])
+                # attn_logits = (parallel_amx_all_to_all(attn_logits.transpose(0, 1).contiguous())
+                #                .view(get_attention_tp_size(), self.num_local_heads, attn_logits.shape[0], 1, attn_logits.shape[3])
+                #                .permute([2, 1, 0, 3, 4])
+                #                .view(attn_logits.shape[0], self.num_local_heads, get_attention_tp_size(), attn_logits.shape[3])
+                #                .contiguous())
+
+                attn_logits = (parallel_amx_all_to_all(attn_logits.squeeze(2).contiguous())
+                               .view(
+                                    get_attention_tp_size(),
+                                    self.num_local_heads,
+                                    attn_logits.shape[1],  # batch size
+                                    attn_logits.shape[3]  # head dim
+                                )
+                               .permute([1, 2, 0, 3])
                                .contiguous())
 
                 attn_output = torch.empty(
-                    (attn_logits.shape[0], self.num_local_heads, self.kv_lora_rank),
+                    (self.num_local_heads, attn_logits.shape[1], self.kv_lora_rank),
                     dtype=attn_output.dtype,
                     device=attn_output.device,
                 )
@@ -1687,7 +1697,7 @@ class DeepseekV2AttentionMLA(nn.Module):
             attn_bmm_output = attn_bmm_output.transpose(0, 1).flatten(1, 2)
         elif _amx_parallel:
             attn_bmm_output = torch.empty(
-                (attn_output.shape[0], self.num_local_heads * self.v_head_dim),
+                (attn_output.shape[1], self.num_local_heads * self.v_head_dim),
                 dtype=attn_output.dtype,
                 device=attn_output.device,
             )
@@ -1696,7 +1706,7 @@ class DeepseekV2AttentionMLA(nn.Module):
                 attn_bmm_output.view(
                     -1, self.num_local_heads, self.v_head_dim
                 ).transpose(0, 1),
-                attn_output.transpose(0, 1),
+                attn_output,
                 self.w_vd,
                 True,  # is_vnni
                 None,  # scale
@@ -1976,16 +1986,18 @@ class DeepseekV2AttentionMLA(nn.Module):
 
             attn_logits = attn_logits[:, :, :1, :]
 
-            attn_logits = (parallel_amx_all_to_all(attn_logits.transpose(0, 1).contiguous())
-                           .view(get_attention_tp_size(), self.num_local_heads, attn_logits.shape[0], 1,
-                                 attn_logits.shape[3])
-                           .permute([2, 1, 0, 3, 4])
-                           .view(attn_logits.shape[0], self.num_local_heads, get_attention_tp_size(),
-                                 attn_logits.shape[3])
+            attn_logits = (parallel_amx_all_to_all(attn_logits.squeeze(2).contiguous())
+                           .view(
+                                get_attention_tp_size(),
+                                self.num_local_heads,
+                                attn_logits.shape[1], # batch size
+                                attn_logits.shape[3]  # head dim
+                            )
+                           .permute([1, 2, 0, 3])
                            .contiguous())
 
             attn_output = torch.empty(
-                (attn_logits.shape[0], self.num_local_heads, self.kv_lora_rank),
+                (self.num_local_heads, attn_logits.shape[1], self.kv_lora_rank),
                 dtype=attn_output.dtype,
                 device=attn_output.device,
             )
@@ -1995,6 +2007,8 @@ class DeepseekV2AttentionMLA(nn.Module):
                 attn_logits,
                 get_attention_tp_size(),
             )
+
+            attn_output = attn_output.transpose(0, 1)
 
 
         # [Note] Align shapes of bmm inputs.
