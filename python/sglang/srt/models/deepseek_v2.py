@@ -34,6 +34,7 @@ from sglang.srt.distributed import (
     get_tensor_model_parallel_world_size,
     parallel_state,
     tensor_model_parallel_all_reduce,
+    init_amx_tp_group,
     parallel_amx_all_gather,
     parallel_amx_all_to_all,
 )
@@ -2526,6 +2527,13 @@ class DeepseekV2Model(nn.Module):
             elif self.first_k_dense_replace < normal_start_layer:
                 normal_end_layer = normal_start_layer = 0
 
+        self_attn = self.layers[0].self_attn
+        init_amx_tp_group(
+            batch_size=forward_batch.batch_size,
+            head_num=self_attn.num_heads,
+            q_head_dim=self_attn.kv_lora_rank + self_attn.qk_rope_head_dim,
+            attn_logits_dim=self_attn.kv_lora_rank + 2,
+        )
         for i in range(normal_start_layer, normal_end_layer):
             with get_global_expert_distribution_recorder().with_current_layer(i):
                 layer = self.layers[i]
