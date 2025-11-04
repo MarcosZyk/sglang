@@ -182,6 +182,9 @@ _is_flashinfer_available = is_flashinfer_available()
 _is_sm100_supported = is_cuda() and is_sm100_supported()
 
 _amx_parallel = os.getenv("AMX_PARALLEL", 0) == "1"
+_TP_SIZE: Optional[int] = None
+_ATTN_OUTPUT: Optional[torch.Tensor] = None
+
 
 logger = logging.getLogger(__name__)
 
@@ -1614,34 +1617,21 @@ class DeepseekV2AttentionMLA(nn.Module):
                 # attn_logits_merged: [head, batch, head_dim]
                 _, attn_logits_merged, _ = forward_batch.attn_backend.forward_metadata
 
-                # attn_logits = attn_logits[:, :, :1, :]
+                global _TP_SIZE, _ATTN_OUTPUT
 
-                # attn_logits = (parallel_amx_all_to_all(attn_logits.transpose(0, 1).contiguous())
-                #                .view(get_attention_tp_size(), self.num_local_heads, attn_logits.shape[0], 1, attn_logits.shape[3])
-                #                .permute([2, 1, 0, 3, 4])
-                #                .view(attn_logits.shape[0], self.num_local_heads, get_attention_tp_size(), attn_logits.shape[3])
-                #                .contiguous())
-
-                attn_logits = (parallel_amx_all_to_all(attn_logits_merged)
-                               .view(
-                                    get_attention_tp_size(),
+                attn_logits = parallel_amx_all_to_all(attn_logits_merged).view(
+                                    _TP_SIZE,
                                     self.num_local_heads,
                                     attn_logits_merged.shape[1],  # batch size
                                     attn_logits_merged.shape[2]  # head dim
                                 )
-                               .permute([1, 2, 0, 3])
-                               .contiguous())
 
-                attn_output = torch.empty(
-                    (self.num_local_heads, attn_logits.shape[1], self.kv_lora_rank),
-                    dtype=attn_output.dtype,
-                    device=attn_output.device,
-                )
-
+                attn_output = _ATTN_OUTPUT
+                # attn_output: [num_local_heads, batch, head_dim]
+                # attn_logits: [tp_size, num_local_heads, batch, head_dim]
                 torch.ops.sgl_kernel.decode_merge_attention_sp_cpu_v2(
                     attn_output,
                     attn_logits,
-                    get_attention_tp_size(),
                 )
 
         if self.use_deep_gemm_bmm:
@@ -1996,31 +1986,21 @@ class DeepseekV2AttentionMLA(nn.Module):
             # attn_logits_merged: [head, batch, head_dim]
             _, attn_logits_merged, _ = forward_batch.attn_backend.forward_metadata
 
-            #  attn_logits = attn_logits[:, :, :1, :]
+            global _TP_SIZE, _ATTN_OUTPUT
 
-            attn_logits = (parallel_amx_all_to_all(attn_logits_merged)
-                           .view(
-                                get_attention_tp_size(),
+            attn_logits = parallel_amx_all_to_all(attn_logits_merged).view(
+                                _TP_SIZE,
                                 self.num_local_heads,
                                 attn_logits_merged.shape[1], # batch size
                                 attn_logits_merged.shape[2]  # head dim
                             )
-                           .permute([1, 2, 0, 3])
-                           .contiguous())
 
-            attn_output = torch.empty(
-                (self.num_local_heads, attn_logits.shape[1], self.kv_lora_rank),
-                dtype=attn_output.dtype,
-                device=attn_output.device,
-            )
+            attn_output = _ATTN_OUTPUT
 
             torch.ops.sgl_kernel.decode_merge_attention_sp_cpu_v2(
                 attn_output,
                 attn_logits,
-                get_attention_tp_size(),
             )
-
-            attn_output = attn_output.transpose(0, 1)
 
 
         # [Note] Align shapes of bmm inputs.
@@ -2035,12 +2015,12 @@ class DeepseekV2AttentionMLA(nn.Module):
         #   mat2: [B, N, K]
         B = self.w_vc.size(0)
         N = self.w_vc.size(1)
-        M = attn_output.size(0)
+        M = attn_output.size(1)
         output = torch.empty([M, int(B * N)], dtype=attn_output.dtype)
         attn_bmm_output = output.view([M, B, N]).transpose_(0, 1)
         torch.ops.sgl_kernel.bmm_cpu(
             attn_bmm_output,
-            attn_output.transpose(0, 1),
+            attn_output,
             self.w_vc,
             True,  # is_vnni
             None,  # scale
@@ -2534,6 +2514,13 @@ class DeepseekV2Model(nn.Module):
             q_head_dim=self_attn.kv_lora_rank + self_attn.qk_rope_head_dim,
             attn_logits_dim=self_attn.kv_lora_rank + 2,
         )
+        global _TP_SIZE, _ATTN_OUTPUT
+        _TP_SIZE = get_attention_tp_size()
+        _ATTN_OUTPUT = torch.empty(
+                (self_attn.num_local_heads, forward_batch.batch_size, self_attn.kv_lora_rank),
+                dtype=torch.bfloat16,
+                device="cpu",
+            )
         for i in range(normal_start_layer, normal_end_layer):
             with get_global_expert_distribution_recorder().with_current_layer(i):
                 layer = self.layers[i]

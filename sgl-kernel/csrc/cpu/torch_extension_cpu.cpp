@@ -118,8 +118,7 @@ void decode_attention_cpu_v2(
 
 void decode_merge_attention_sp_cpu_v2(
     at::Tensor& output,
-    at::Tensor& attn_logits,
-    int64_t tp_size);
+    at::Tensor& attn_logits);
 
 // weight prepack
 at::Tensor convert_weight_packed(at::Tensor& weight);
@@ -313,7 +312,7 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
   m.impl("decode_attention_cpu_v2", torch::kCPU, &decode_attention_cpu_v2);
 
   m.def(
-      "decode_merge_attention_sp_cpu_v2(Tensor(a!) output, Tensor attn_logits, int tp_size) -> ()");
+      "decode_merge_attention_sp_cpu_v2(Tensor(a!) output, Tensor attn_logits) -> ()");
   m.impl("decode_merge_attention_sp_cpu_v2", torch::kCPU, &decode_merge_attention_sp_cpu_v2);
 
 

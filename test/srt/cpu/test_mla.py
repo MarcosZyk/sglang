@@ -177,7 +177,7 @@ class TestMLA(CustomTestCase):
             q,
             k_buffer3,
             v_buffer3,
-            o,
+            o_v2,
             key,
             value,
             loc,
@@ -220,13 +220,14 @@ class TestMLA(CustomTestCase):
         # print(f"attn_logits_merged1 0: {attn_logits_merged1[0, 0, -16:]}")
         # print(f"attn_logits_merged2 0: {attn_logits_merged2[0, 0, -16:]}")
 
-        attn_logits_merged[:, :, 0, :] = attn_logits_merged1
-        attn_logits_merged[:, :, 1, :] = attn_logits_merged2
+        # [tp, H_Q, B, D_V + 2]
+        attn_logits_merged[0, :, :, :] = attn_logits_merged1
+        attn_logits_merged[1, :, :, :] = attn_logits_merged2
         # print(f"attn_logits_merged 0: {attn_logits_merged[0, 0, 0, -16:]}")
+        # output: H_Q, B, D_V
         torch.ops.sgl_kernel.decode_merge_attention_sp_cpu_v2(
             o_v2,
-            attn_logits_merged,
-            tp_size=2
+            attn_logits_merged
         )
         # swap the first two dims
         # print(f"o_v2 before permute shape: {o_v2.shape}")

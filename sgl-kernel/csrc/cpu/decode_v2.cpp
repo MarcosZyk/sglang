@@ -1650,6 +1650,9 @@ void decode_attention_cpu_v2(
   });
 }
 
+// attn_output: [num_local_heads, batch, head_dim]
+// attn_logits: [num_local_heads, batch, tp_size, head_dim]
+// attn_logits_merged: [tp_size, num_local_heads, batch, head_dim]
 template <typename scalar_t>
 void decode_merge_kv_splits_sp(
     scalar_t* __restrict__ output,
@@ -1658,8 +1661,8 @@ void decode_merge_kv_splits_sp(
     int64_t num_heads,
     int64_t head_size_v,
     int64_t tp_size,
-    int64_t l_stride1,
-    int64_t l_stride2) {
+    int64_t l_stride0,
+    int64_t l_stride1) {
   using Vec = at::vec::Vectorized<float>;
 
   // parallel on [batches, num_heads]
@@ -1677,9 +1680,9 @@ void decode_merge_kv_splits_sp(
 
       // update acc with from each kv_split
       for (int64_t kv_id = 0; kv_id < tp_size; ++kv_id) {
-        float* __restrict__ tv = acc + kv_id * l_stride2;
-        const float tlogic = (acc + kv_id * l_stride2)[head_size_v];
-        const float flat = (acc + kv_id * l_stride2)[head_size_v + 1];
+        float* __restrict__ tv = acc + kv_id * l_stride0;
+        const float tlogic = tv[head_size_v];
+        const float flat = tv[head_size_v + 1];
         if (flat == 0.f) {
             continue;
         }
@@ -1704,10 +1707,12 @@ void decode_merge_kv_splits_sp(
   });
 }
 
+// attn_output: [num_local_heads, batch, head_dim]
+// attn_logits: [num_local_heads, batch, tp_size, head_dim]
+// attn_logits_merged: [tp_size, num_local_heads, batch, head_dim]
 void decode_merge_attention_sp_cpu_v2(
     at::Tensor& output,
-    at::Tensor& attn_logits,
-    int64_t tp_size) {
+    at::Tensor& attn_logits) {
   RECORD_FUNCTION(
       "sgl-kernel::decode_merge_attention_sp_cpu",
       std::vector<c10::IValue>({output, attn_logits}));
@@ -1717,12 +1722,14 @@ void decode_merge_attention_sp_cpu_v2(
   CHECK_DIM(3, output);
   CHECK_DIM(4, attn_logits);
 
-  int64_t num_heads = attn_logits.size(0);
-  int64_t num_seqs = attn_logits.size(1);
+  int64_t num_heads = attn_logits.size(1);
+  int64_t num_seqs = attn_logits.size(2);
+  int64_t tp_size = attn_logits.size(0);
   // attn_logits layout: [..., head_size_v(values), header, flag]
   int64_t head_size_v = attn_logits.size(3) - 2;
+  int64_t l_stride0 =  attn_logits.size(1) * attn_logits.size(2) * attn_logits.size(3);
   int64_t l_stride1 = attn_logits.size(2) * attn_logits.size(3);
-  int64_t l_stride2 = attn_logits.size(3);
+  // int64_t l_stride2 = attn_logits.size(3);
 
   AT_DISPATCH_REDUCED_FLOATING_TYPES(output.scalar_type(), "decode_merge_kv_splits_sp", [&] {
     // merge the kv_splits across tp_ranks
@@ -1733,7 +1740,7 @@ void decode_merge_attention_sp_cpu_v2(
         num_heads,
         head_size_v,
         tp_size,
-        l_stride1,
-        l_stride2);
+        l_stride0,
+        l_stride1);
   });
 }
