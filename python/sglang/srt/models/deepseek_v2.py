@@ -1610,9 +1610,10 @@ class DeepseekV2AttentionMLA(nn.Module):
             if not _amx_parallel:
                 attn_output = attn_output.view(-1, self.num_local_heads, self.kv_lora_rank)
             else:
-                attn_logits, _ = forward_batch.attn_backend.forward_metadata
+                # attn_logits_merged: [head, batch, head_dim]
+                _, attn_logits_merged, _ = forward_batch.attn_backend.forward_metadata
 
-                attn_logits = attn_logits[:, :, :1, :]
+                # attn_logits = attn_logits[:, :, :1, :]
 
                 # attn_logits = (parallel_amx_all_to_all(attn_logits.transpose(0, 1).contiguous())
                 #                .view(get_attention_tp_size(), self.num_local_heads, attn_logits.shape[0], 1, attn_logits.shape[3])
@@ -1620,12 +1621,12 @@ class DeepseekV2AttentionMLA(nn.Module):
                 #                .view(attn_logits.shape[0], self.num_local_heads, get_attention_tp_size(), attn_logits.shape[3])
                 #                .contiguous())
 
-                attn_logits = (parallel_amx_all_to_all(attn_logits.squeeze(2).contiguous())
+                attn_logits = (parallel_amx_all_to_all(attn_logits_merged)
                                .view(
                                     get_attention_tp_size(),
                                     self.num_local_heads,
-                                    attn_logits.shape[1],  # batch size
-                                    attn_logits.shape[3]  # head dim
+                                    attn_logits_merged.shape[1],  # batch size
+                                    attn_logits_merged.shape[2]  # head dim
                                 )
                                .permute([1, 2, 0, 3])
                                .contiguous())
@@ -1991,16 +1992,17 @@ class DeepseekV2AttentionMLA(nn.Module):
         if not _amx_parallel:
             attn_output = attn_output.view(-1, self.num_local_heads, self.kv_lora_rank)
         else:
-            attn_logits, _ = forward_batch.attn_backend.forward_metadata
+            # attn_logits_merged: [head, batch, head_dim]
+            _, attn_logits_merged, _ = forward_batch.attn_backend.forward_metadata
 
-            attn_logits = attn_logits[:, :, :1, :]
+            #  attn_logits = attn_logits[:, :, :1, :]
 
-            attn_logits = (parallel_amx_all_to_all(attn_logits.squeeze(2).contiguous())
+            attn_logits = (parallel_amx_all_to_all(attn_logits_merged)
                            .view(
                                 get_attention_tp_size(),
                                 self.num_local_heads,
-                                attn_logits.shape[1], # batch size
-                                attn_logits.shape[3]  # head dim
+                                attn_logits_merged.shape[1], # batch size
+                                attn_logits_merged.shape[2]  # head dim
                             )
                            .permute([1, 2, 0, 3])
                            .contiguous())

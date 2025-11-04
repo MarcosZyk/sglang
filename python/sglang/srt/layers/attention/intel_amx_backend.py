@@ -69,6 +69,15 @@ class IntelAMXAttnBackend(AttentionBackend):
                 dtype=torch.float32,
                 device=self.device,
             )
+            attn_logits_merged = torch.zeros(
+                (
+                    self.num_head,
+                    bs,
+                    self.v_head_dim + 2,
+                ),
+                dtype=torch.float32,
+                device=self.device,
+            )
         else:
             attn_logits = torch.zeros(
                 (
@@ -80,13 +89,14 @@ class IntelAMXAttnBackend(AttentionBackend):
                 dtype=torch.float32,
                 device=self.device,
             )
+            attn_logits_merged = None
 
         if forward_batch.forward_mode.is_decode_or_idle():
             max_extend_len = None
         else:
             max_extend_len = torch.max(forward_batch.extend_seq_lens).item()
 
-        self.forward_metadata = (attn_logits, max_extend_len)
+        self.forward_metadata = (attn_logits, attn_logits_merged, max_extend_len)
 
 
     def get_graph_seq_len_fill_value(self):
@@ -111,7 +121,7 @@ class IntelAMXAttnBackend(AttentionBackend):
                 layer, forward_batch.out_cache_loc, k, v
             )
 
-        _, max_extend_len = self.forward_metadata
+        _, _, max_extend_len = self.forward_metadata
 
         self.extend_attention_fwd(
             q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
@@ -140,7 +150,7 @@ class IntelAMXAttnBackend(AttentionBackend):
         forward_batch: ForwardBatch,
         save_kv_cache=True,
     ):
-        attn_logits, _ = self.forward_metadata
+        attn_logits, attn_logits_merged, _ = self.forward_metadata
 
         q = q.reshape(-1, layer.tp_q_head_num * layer.qk_head_dim)
 
@@ -159,6 +169,7 @@ class IntelAMXAttnBackend(AttentionBackend):
                 v,
                 forward_batch.out_cache_loc,
                 attn_logits,
+                attn_logits_merged,
                 forward_batch.req_to_token_pool.req_to_token,
                 forward_batch.req_pool_indices,
                 forward_batch.seq_lens,

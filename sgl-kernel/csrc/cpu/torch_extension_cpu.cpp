@@ -106,6 +106,7 @@ void decode_attention_cpu_v2(
     at::Tensor& value,
     at::Tensor& loc,
     at::Tensor& attn_logits,
+    at::Tensor& attn_logits_merged,
     at::Tensor& req_to_token,
     at::Tensor& req_pool_indices,
     at::Tensor& seq_lens,
@@ -307,7 +308,7 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
 
   m.def(
       "decode_attention_cpu_v2(Tensor query, Tensor k_cache, Tensor v_cahce, Tensor(a!) output, Tensor key, Tensor value, "
-      "Tensor loc, Tensor attn_logits, Tensor req_to_token, Tensor req_pool_indices, Tensor seq_lens, float sm_scale, "
+      "Tensor loc, Tensor attn_logits, Tensor attn_logits_merged, Tensor req_to_token, Tensor req_pool_indices, Tensor seq_lens, float sm_scale, "
       "float logit_cap, int tp_rank, int tp_size, int kv_block_length) -> ()");
   m.impl("decode_attention_cpu_v2", torch::kCPU, &decode_attention_cpu_v2);
 

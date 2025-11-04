@@ -814,6 +814,7 @@ template <typename scalar_t>
 void decode_accumulate_kv_splits(
     scalar_t* __restrict__ output,
     float* __restrict__ attn_logits,
+    float* __restrict__ attn_logits_merged,
     int64_t batches,
     int64_t num_heads,
     int64_t head_size_v,
@@ -829,8 +830,14 @@ void decode_accumulate_kv_splits(
     //   m_delta = std::exp(-inf) = 0
     //   e_logic = std::exp(0) = 1
     //   acc = acc * m_delta + tv * e_logic = tv
+    // attn: [head, bs, num_kv_splits, head_size_v + 2]
+    // l_stride1: (head_size_v + 2) * num_kv_splits
+    // l_stride2: head_size_v + 2
+    // attn_logits_merged: [head, bs, head_size_v + 2]
+    // 
     for (int64_t i = begin; i < end; ++i) {
       float* __restrict__ acc = attn_logits + i * l_stride1;
+      float* __restrict__ merged = attn_logits_merged + i * l_stride2;
 
       float s_prime = 0.f;
       float m_prime = -std::numeric_limits<scalar_t>::infinity();
@@ -861,16 +868,16 @@ void decode_accumulate_kv_splits(
       }
 
       if (s_prime == 0.f) {
-        fill_stub(acc, 0.f, head_size_v + 2);
+        fill_stub(merged, 0.f, head_size_v + 2);
         continue;
       }
       // don't save the normalized output now, we need to accumulate across tp_ranks
       // copy_stub<scalar_t>(output + i * head_size_v, acc, 1 / s_prime, head_size_v);
       // save new attn logits for distributed accumulation
       float r_s_prime = 1 / s_prime;
-      at::vec::map<float>([r_s_prime](Vec x) { return x * Vec(r_s_prime); }, acc, acc, head_size_v);
-      acc[head_size_v] = m_prime + std::log(s_prime);
-      acc[head_size_v + 1] = 1.f; // mark as valid
+      at::vec::map<float>([r_s_prime](Vec x) { return x * Vec(r_s_prime); }, merged, acc, head_size_v);
+      merged[head_size_v] = m_prime + std::log(s_prime);
+      merged[head_size_v + 1] = 1.f; // mark as valid
     }
   });
 }
@@ -879,6 +886,7 @@ template <typename scalar_t, typename index_t, int64_t BLOCK_N>
 void decode_attention_kernel_impl(
     scalar_t* __restrict__ output,
     float* __restrict__ attn_logits,
+    float* __restrict__ attn_logits_merged,
     const scalar_t* __restrict__ query,
     const scalar_t* __restrict__ k_buffer,
     const scalar_t* __restrict__ v_buffer,
@@ -1015,13 +1023,14 @@ void decode_attention_kernel_impl(
   });
 
   decode_accumulate_kv_splits(
-      output, attn_logits, batches, num_heads, head_size_v, num_kv_splits, l_stride1, l_stride2);
+      output, attn_logits, attn_logits_merged, batches, num_heads, head_size_v, num_kv_splits, l_stride1, l_stride2);
 }  // MHA
 
 template <typename scalar_t, typename index_t, int64_t BLOCK_N>
 void decode_attention_mla_kernel_impl(
     scalar_t* __restrict__ output,
     float* __restrict__ attn_logits,
+    float* __restrict__ attn_logits_merged,
     const scalar_t* __restrict__ query,
     const scalar_t* __restrict__ k_buffer,
     const scalar_t* __restrict__ v_buffer,
@@ -1226,7 +1235,7 @@ void decode_attention_mla_kernel_impl(
   });
   // std::cout << "After brgemm release " << "get the thread num: " << at::get_thread_num() << std::endl;
   decode_accumulate_kv_splits(
-      output, attn_logits, batches, num_heads, head_size_v, num_kv_splits, l_stride1, l_stride2);
+      output, attn_logits, attn_logits_merged, batches, num_heads, head_size_v, num_kv_splits, l_stride1, l_stride2);
   // std::cout << "After decode accumulate " << "get the thread num: " << at::get_thread_num() << std::endl;
 }  // MLA
 
@@ -1234,6 +1243,7 @@ template <typename scalar_t, typename index_t, int64_t BLOCK_N>
 void decode_attention_grouped_kernel_impl(
     scalar_t* __restrict__ output,
     float* __restrict__ attn_logits,
+    float* __restrict__ attn_logits_merged,
     const scalar_t* __restrict__ query,
     const scalar_t* __restrict__ k_buffer,
     const scalar_t* __restrict__ v_buffer,
@@ -1399,7 +1409,7 @@ void decode_attention_grouped_kernel_impl(
   });
 
   decode_accumulate_kv_splits(
-      output, attn_logits, batches, num_heads, head_size_v, num_kv_splits, l_stride1, l_stride2);
+      output, attn_logits, attn_logits_merged, batches, num_heads, head_size_v, num_kv_splits, l_stride1, l_stride2);
 }  // GQA/MQA
 
 }  // anonymous namespace
@@ -1422,6 +1432,7 @@ void decode_attention_cpu_v2(
     at::Tensor& value,
     at::Tensor& loc,
     at::Tensor& attn_logits,
+    at::Tensor& attn_logits_merged,
     at::Tensor& req_to_token,
     at::Tensor& req_pool_indices,
     at::Tensor& seq_lens,
@@ -1548,6 +1559,7 @@ void decode_attention_cpu_v2(
         decode_attention_kernel_impl<scalar_t, index_t, BLOCK_N>(
             output.data_ptr<scalar_t>(),
             attn_logits.data_ptr<float>(),
+            attn_logits_merged.data_ptr<float>(),
             query.data_ptr<scalar_t>(),
             (const scalar_t*)k_buffer_data,
             (const scalar_t*)v_buffer_data,
@@ -1575,6 +1587,7 @@ void decode_attention_cpu_v2(
         decode_attention_mla_kernel_impl<scalar_t, index_t, BLOCK_N>(
             output.data_ptr<scalar_t>(),
             attn_logits.data_ptr<float>(),
+            attn_logits_merged.data_ptr<float>(),
             query.data_ptr<scalar_t>(),
             (const scalar_t*)k_buffer_data,
             (const scalar_t*)v_buffer_data,
@@ -1608,6 +1621,7 @@ void decode_attention_cpu_v2(
         decode_attention_grouped_kernel_impl<scalar_t, index_t, BLOCK_N>(
             output.data_ptr<scalar_t>(),
             attn_logits.data_ptr<float>(),
+            attn_logits_merged.data_ptr<float>(),
             query.data_ptr<scalar_t>(),
             (const scalar_t*)k_buffer_data,
             (const scalar_t*)v_buffer_data,

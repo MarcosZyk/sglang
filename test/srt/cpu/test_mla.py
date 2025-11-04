@@ -135,6 +135,24 @@ class TestMLA(CustomTestCase):
             dtype=torch.float32,
         )
         
+        attn_logits_merged1 = torch.empty(
+            # (B, H_Q, 2, D_V + 2),
+            (H_Q, B, D_V + 2),
+            dtype=torch.float32,
+        )
+        
+        attn_logits_merged2 = torch.empty(
+            # (B, H_Q, 2, D_V + 2),
+            (H_Q, B, D_V + 2),
+            dtype=torch.float32,
+        )
+
+        attn_logits_merged = torch.empty(
+            # (B, H_Q, 2, D_V + 2),
+            (H_Q, B, 2, D_V + 2),
+            dtype=torch.float32,
+        )
+         
         torch.ops.sgl_kernel.decode_attention_cpu_v2(
             q,
             k_buffer3,
@@ -144,6 +162,7 @@ class TestMLA(CustomTestCase):
             value,
             loc,
             attn_logits_r1,
+            attn_logits_merged1,
             req_to_token,
             b_req_idx,
             b_seq_len,
@@ -163,6 +182,7 @@ class TestMLA(CustomTestCase):
             value,
             loc,
             attn_logits_r2,
+            attn_logits_merged2,
             req_to_token,
             b_req_idx,
             b_seq_len,
@@ -196,14 +216,12 @@ class TestMLA(CustomTestCase):
 
         # print(f"attn_logits_r2 3: {attn_logits_r2[0, 0, 3, -16:]}")
         # print(f"attn_logits 7: {attn_logits[0, 0, 7, :16]}")
+        
+        # print(f"attn_logits_merged1 0: {attn_logits_merged1[0, 0, -16:]}")
+        # print(f"attn_logits_merged2 0: {attn_logits_merged2[0, 0, -16:]}")
 
-        attn_logits_merged = torch.empty(
-            # (B, H_Q, 2, D_V + 2),
-            (H_Q, B, 2, D_V + 2),
-            dtype=torch.float32,
-        )
-        attn_logits_merged[:, :, 0, :] = attn_logits_r1[:, :, 0, :]
-        attn_logits_merged[:, :, 1, :] = attn_logits_r2[:, :, 0, :]
+        attn_logits_merged[:, :, 0, :] = attn_logits_merged1
+        attn_logits_merged[:, :, 1, :] = attn_logits_merged2
         # print(f"attn_logits_merged 0: {attn_logits_merged[0, 0, 0, -16:]}")
         torch.ops.sgl_kernel.decode_merge_attention_sp_cpu_v2(
             o_v2,
