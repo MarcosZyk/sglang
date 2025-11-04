@@ -1207,6 +1207,11 @@ class DeepseekV2AttentionMLA(nn.Module):
             ), "MLA Preprocess only works with W8A8Int8"
             self.mla_preprocess = None
 
+        if self.q_lora_rank is not None:
+            self.decode_method = AttnForwardMethod.MLA_FUSED_ROPE_CPU
+        else:
+            self.decode_method = AttnForwardMethod.MLA
+
     def dispatch_attn_forward_method(
         self, forward_batch: ForwardBatch
     ) -> AttnForwardMethod:
@@ -1268,22 +1273,30 @@ class DeepseekV2AttentionMLA(nn.Module):
             self.attn_mha.kv_b_proj = self.kv_b_proj
 
         # when hidden_states is a tuple of tensors, the tuple will include quantized weight and scale tensor
-        if isinstance(hidden_states, tuple):
-            if hidden_states[0].shape[0] == 0:
-                assert (
-                    not self.o_proj.reduce_results
-                ), "short-circuiting allreduce will lead to hangs"
-                return hidden_states[0]
+        # if isinstance(hidden_states, tuple):
+        #     if hidden_states[0].shape[0] == 0:
+        #         assert (
+        #             not self.o_proj.reduce_results
+        #         ), "short-circuiting allreduce will lead to hangs"
+        #         return hidden_states[0]
+        # else:
+        #     if hidden_states.shape[0] == 0:
+        #         assert (
+        #             not self.o_proj.reduce_results
+        #         ), "short-circuiting allreduce will lead to hangs"
+        #         return hidden_states, None, forward_batch, None
+
+        # attn_forward_method = self.dispatch_attn_forward_method(forward_batch)
+        if forward_batch.forward_mode.is_decode_or_idle():
+            attn_forward_method = self.decode_method
         else:
-            if hidden_states.shape[0] == 0:
-                assert (
-                    not self.o_proj.reduce_results
-                ), "short-circuiting allreduce will lead to hangs"
-                return hidden_states, None, forward_batch, None
+            attn_forward_method = AttnForwardMethod.MHA
 
-        attn_forward_method = self.dispatch_attn_forward_method(forward_batch)
-
-        if attn_forward_method == AttnForwardMethod.MHA:
+        if attn_forward_method == AttnForwardMethod.MLA_FUSED_ROPE_CPU:
+            inner_state = self.forward_absorb_fused_mla_rope_cpu_prepare(
+                positions, hidden_states, forward_batch, zero_allocator
+            )
+        elif attn_forward_method == AttnForwardMethod.MHA:
             inner_state = self.forward_normal_prepare(
                 positions, hidden_states, forward_batch, zero_allocator
             )
@@ -1318,10 +1331,6 @@ class DeepseekV2AttentionMLA(nn.Module):
             inner_state = self.forward_absorb_fused_mla_rope_prepare(
                 positions, hidden_states, forward_batch, zero_allocator
             )
-        elif attn_forward_method == AttnForwardMethod.MLA_FUSED_ROPE_CPU:
-            inner_state = self.forward_absorb_fused_mla_rope_cpu_prepare(
-                positions, hidden_states, forward_batch, zero_allocator
-            )
         else:
             raise NotImplementedError
         return None, attn_forward_method, forward_batch, inner_state
@@ -1330,10 +1339,12 @@ class DeepseekV2AttentionMLA(nn.Module):
         hidden_states, attn_forward_method, forward_batch, inner_state = (
             intermediate_state
         )
-        if inner_state is None:
-            return hidden_states
+        # if inner_state is None:
+        #     return hidden_states
 
-        if attn_forward_method == AttnForwardMethod.MHA:
+        if attn_forward_method == AttnForwardMethod.MLA_FUSED_ROPE_CPU:
+            return self.forward_absorb_fused_mla_rope_cpu_core(*inner_state)
+        elif attn_forward_method == AttnForwardMethod.MHA:
             return self.forward_normal_core(*inner_state)
         elif attn_forward_method == AttnForwardMethod.MHA_CHUNKED_KV:
             return self.forward_normal_chunked_kv_core(*inner_state)
@@ -1341,8 +1352,6 @@ class DeepseekV2AttentionMLA(nn.Module):
             return self.forward_absorb_core(*inner_state)
         elif attn_forward_method == AttnForwardMethod.MLA_FUSED_ROPE:
             return self.forward_absorb_fused_mla_rope_core(*inner_state)
-        elif attn_forward_method == AttnForwardMethod.MLA_FUSED_ROPE_CPU:
-            return self.forward_absorb_fused_mla_rope_cpu_core(*inner_state)
         else:
             raise NotImplementedError
 
@@ -1849,9 +1858,9 @@ class DeepseekV2AttentionMLA(nn.Module):
         forward_batch: ForwardBatch,
         zero_allocator: BumpAllocator,
     ):
-        assert self.q_lora_rank is not None and use_intel_amx_backend(
-            self
-        ), "forward_absorb_fused_mla_rope_cpu_prepare requires q_lora_rank is not None and use_intel_amx_backend"
+        # assert self.q_lora_rank is not None and use_intel_amx_backend(
+        #     self
+        # ), "forward_absorb_fused_mla_rope_cpu_prepare requires q_lora_rank is not None and use_intel_amx_backend"
 
         q_input, k_input, v_input = (
             torch.ops.sgl_kernel.qkv_proj_with_rope_fused_weight(
@@ -2273,35 +2282,20 @@ class DeepseekV2DecoderLayer(nn.Module):
             hidden_states, residual, forward_batch
         )
 
-        should_allreduce_fusion = (
-            self.layer_communicator.should_fuse_mlp_allreduce_with_next_layer(
-                forward_batch
-            )
-        )
-
-        # For DP with padding, reduce scatter can be used instead of all-reduce.
-        use_reduce_scatter = self.layer_communicator.should_use_reduce_scatter(
-            forward_batch
-        )
-
         if isinstance(self.mlp, DeepseekV2MLP):
             gemm_output_zero_allocator = None
 
         hidden_states = self.mlp(
             hidden_states,
             forward_batch,
-            should_allreduce_fusion,
-            use_reduce_scatter,
+            False,
+            False,
             gemm_output_zero_allocator,
         )
 
-        if should_allreduce_fusion:
-            hidden_states._sglang_needs_allreduce_fusion = True
-
-        if not should_allreduce_fusion:
-            hidden_states, residual = self.layer_communicator.postprocess_layer(
-                hidden_states, residual, forward_batch
-            )
+        hidden_states, residual = self.layer_communicator.postprocess_layer(
+            hidden_states, residual, forward_batch
+        )
 
         return hidden_states, residual
 

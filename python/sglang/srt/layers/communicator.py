@@ -218,51 +218,13 @@ class LayerCommunicator:
         forward_batch: ForwardBatch,
         qaunt_format: str = "",
     ):
-        if hidden_states.shape[0] == 0:
+        if residual is None:
             residual = hidden_states
+            hidden_states = self.input_layernorm(hidden_states)
         else:
-            if (
-                residual is not None
-                and hasattr(hidden_states, "_sglang_needs_allreduce_fusion")
-                and hidden_states._sglang_needs_allreduce_fusion
-            ):
-                hidden_states, residual = (
-                    self.input_layernorm.forward_with_allreduce_fusion(
-                        hidden_states, residual
-                    )
-                )
-            else:
-                if residual is None:
-                    residual = hidden_states
-
-                    if _use_aiter and _is_gfx95_supported and ("mxfp4" in qaunt_format):
-                        hidden_states = fused_rms_mxfp4_quant(
-                            hidden_states,
-                            self.input_layernorm.weight,
-                            self.input_layernorm.variance_epsilon,
-                            None,
-                            None,
-                            None,
-                            None,
-                        )
-                    else:
-                        hidden_states = self.input_layernorm(hidden_states)
-                else:
-                    if _use_aiter and _is_gfx95_supported and ("mxfp4" in qaunt_format):
-                        hidden_states, residual = fused_rms_mxfp4_quant(
-                            hidden_states,
-                            self.input_layernorm.weight,
-                            self.input_layernorm.variance_epsilon,
-                            None,
-                            None,
-                            None,
-                            residual,
-                        )
-                    else:
-                        hidden_states, residual = self.input_layernorm(
-                            hidden_states, residual
-                        )
-
+            hidden_states, residual = self.input_layernorm(
+                hidden_states, residual
+            )
         hidden_states = self._communicate_simple_fn(
             hidden_states=hidden_states,
             forward_batch=forward_batch,
