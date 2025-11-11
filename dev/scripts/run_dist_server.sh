@@ -1,7 +1,9 @@
 NODE_RANK=$1
 HOST_PORT=$2
+BIND_NUMA=$3
 
 export AMX_PARALLEL=1
+export SGLANG_CPU_OMP_THREADS_BIND=$BIND_NUMA
 
 python3 -m sglang.launch_server \
     --device cpu \
