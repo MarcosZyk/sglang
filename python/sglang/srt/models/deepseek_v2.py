@@ -999,6 +999,7 @@ class DeepseekV2AttentionMLA(nn.Module):
 
         self.num_heads = num_heads
         assert num_heads % attn_tp_size == 0
+        logger.info(f"num_heads={num_heads}; attn_tp_size={attn_tp_size}")
         self.num_local_heads = num_heads // attn_tp_size
         self.scaling = self.qk_head_dim**-0.5
         self.rope_theta = rope_theta
