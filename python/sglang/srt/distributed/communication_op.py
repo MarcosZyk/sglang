@@ -7,6 +7,7 @@ import torch.distributed
 from torch._C._distributed_c10d import (
     AllgatherOptions,
     AllToAllOptions,
+    AllreduceOptions,
 )
 
 from .parallel_state import get_tp_group
@@ -80,3 +81,16 @@ def parallel_amx_all_to_all(input_: torch.Tensor,) -> torch.Tensor:
     work.wait()
 
     return _ALL_TO_ALL_OUTPUT
+
+
+def parallel_amx_all_reduce(input_: torch.Tensor,) -> torch.Tensor:
+    global _GROUP
+    opts = AllreduceOptions()
+
+    work = _GROUP.allreduce([input_], opts)
+
+    work.wait()
+
+    return input_
+
+

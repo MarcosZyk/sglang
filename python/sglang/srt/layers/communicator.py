@@ -22,6 +22,7 @@ import torch
 from sglang.srt.distributed import (
     get_tensor_model_parallel_world_size,
     tensor_model_parallel_all_reduce,
+    parallel_amx_all_reduce,
 )
 from sglang.srt.layers.dp_attention import (
     attn_tp_all_gather_into_tensor,
@@ -500,7 +501,7 @@ class CommunicateWithAllReduceAndLayerNormFn:
                     hidden_states, residual
                 )
             else:
-                hidden_states = tensor_model_parallel_all_reduce(hidden_states)
+                hidden_states = parallel_amx_all_reduce(hidden_states)
                 if context.cache is not None:
                     _ = prepare_weight_cache(hidden_states, context.cache)
                 hidden_states, residual = layernorm(hidden_states, residual)

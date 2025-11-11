@@ -37,6 +37,7 @@ from sglang.srt.distributed import (
     init_amx_tp_group,
     parallel_amx_all_gather,
     parallel_amx_all_to_all,
+    parallel_amx_all_reduce,
 )
 from sglang.srt.distributed.device_communicators.pynccl_allocator import (
     use_symmetric_memory,
@@ -803,7 +804,7 @@ class DeepseekV2MoE(nn.Module):
             True,  # is_vnni
         )
         if self.tp_size > 1 and not should_allreduce_fusion:
-            final_hidden_states = tensor_model_parallel_all_reduce(final_hidden_states)
+            final_hidden_states = parallel_amx_all_reduce(final_hidden_states)
         return final_hidden_states
 
     def forward_deepep(
