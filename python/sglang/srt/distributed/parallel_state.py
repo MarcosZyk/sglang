@@ -471,7 +471,7 @@ class GroupCoordinator:
             with maybe_pynccl_context, maybe_pymscclpp_context:
                 yield graph_capture_context
 
-    @torch.compiler.disable(recursive=True)
+    # @torch.compiler.disable(recursive=True)
     def all_reduce(self, input_: torch.Tensor) -> torch.Tensor:
         """
         User-facing all-reduce function before we actually call the
@@ -645,7 +645,7 @@ class GroupCoordinator:
                 output, input, group_name=self.unique_name
             )
 
-    @torch.compiler.disable(recursive=True)
+    # @torch.compiler.disable(recursive=True)
     def all_gather(
         self,
         input_: torch.Tensor,
