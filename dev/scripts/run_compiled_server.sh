@@ -16,7 +16,7 @@ python3 -m sglang.launch_server \
     --chunked-prefill-size=-1 \
     --model-path /sgl-workspace/models/DeepSeek-V2-Lite-Chat \
     --enable-torch-compile \
-    --torch-compile-max-bs 4 \
+    --torch-compile-max-bs 1 \
     --tp 2 \
     --dist-init-addr 127.0.0.1:20000 \
     --host 0.0.0.0 --port $HOST_PORT \
