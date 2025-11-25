@@ -703,9 +703,12 @@ class GroupCoordinator:
             return torch.ops.sgl_kernel.shm_allgather(input_, dim)
 
         if input_.is_cpu:
-            torch.distributed.all_gather_into_tensor(
-                output_tensor, input_, group=self.device_group
-            )
+            from torch.distributed.distributed_c10d import AllgatherOptions
+            opts = AllgatherOptions()
+            self.device_group._allgather_base(output_tensor, input_, opts)
+            # torch.distributed.all_gather_into_tensor(
+            #     output_tensor, input_, group=self.device_group
+            # )
         else:
             self.all_gather_into_tensor(output_tensor, input_)
 
