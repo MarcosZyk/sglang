@@ -70,6 +70,7 @@ def patch_model(
             yield torch.compile(
                 torch.no_grad()(model.forward),
                 dynamic=False,
+                mode="reduce-overhead"
             )
         else:
             yield model.forward
@@ -84,9 +85,9 @@ def set_torch_compile_config():
 
     torch._inductor.config.fx_graph_cache = True  # Experimental feature to reduce compilation times, will be on by default in future
     torch._inductor.config.freezing = True
-    torch._dynamo.config.accumulated_cache_size_limit = 1024
+    torch._dynamo.config.accumulated_cache_size_limit = 4096
     if hasattr(torch._dynamo.config, "cache_size_limit"):
-        torch._dynamo.config.cache_size_limit = 1024
+        torch._dynamo.config.cache_size_limit = 4096
     monkey_patch_torch_compile()
 
 
