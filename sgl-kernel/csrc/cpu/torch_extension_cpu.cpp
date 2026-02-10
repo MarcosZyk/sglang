@@ -294,7 +294,7 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
   m.def(
       "decode_attention_cpu_v2(Tensor query, Tensor k_cache, Tensor v_cahce, Tensor(a!) output, Tensor key, Tensor value, "
       "Tensor loc, Tensor attn_logits, Tensor req_to_token, Tensor req_pool_indices, Tensor seq_lens, float sm_scale, "
-      "float logit_cap) -> ()");
+      "float logit_cap, int head_block_size) -> ()");
   m.impl("decode_attention_cpu_v2", torch::kCPU, &decode_attention_cpu_v2);
 
   // extend
