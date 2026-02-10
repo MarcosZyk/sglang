@@ -11,11 +11,11 @@ def run_batch(*args, **kwargs):
         latency = bm_mla(*args, **kwargs)
         results.append(latency)
     return {
-        "min": np.min(results).real,
-        "max": np.max(results).real,
-        "mean": np.mean(results).real,
-        "std": np.std(results).real,
-        "median": np.median(results).real,
+        "min": f"{np.min(results):.2f}",
+        "median": f"{np.median(results):.2f}",
+        "max": f"{np.max(results):.2f}",
+        "mean": f"{np.mean(results):.2f}",
+        "std": f"{np.std(results):.2f}",
     }
 
 def bm_core_number(*args, **kwargs):
