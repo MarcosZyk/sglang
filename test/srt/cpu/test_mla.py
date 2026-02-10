@@ -161,7 +161,7 @@ class TestMLA(CustomTestCase):
         D_V = 512
         seq_len = 16 * 1024
 
-        dtype = torch.int8
+        dtype = torch.bfloat16
 
         total_tokens = B * seq_len
         sm_scale = (128 + 64)**-0.5
