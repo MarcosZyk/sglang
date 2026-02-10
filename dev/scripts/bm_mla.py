@@ -5,7 +5,7 @@ import sgl_kernel
 
 torch.manual_seed(1234)
 
-def bm_mla(seq_len: int, head_num: int, head_block_size: int, split_num: int, ):
+def bm_mla(seq_len: int, head_num: int, head_block_size: int, split_num: int, ) -> float:
     B = 1
     H_Q = head_num
     H_KV = 1
@@ -65,6 +65,7 @@ def bm_mla(seq_len: int, head_num: int, head_block_size: int, split_num: int, ):
 
     print(f"Finish decoding {round} rounds in {duration * 1000} ms.", flush=True)
     print(f"Avg latency {duration * 1000 * 1000 / round} us.", flush=True)
+    return duration * 1000 * 1000 / round
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
