@@ -70,7 +70,7 @@ if __name__ == "__main__":
 
     # 添加参数
     parser.add_argument('--seq-len', '-l', type=int, default=1024, )
-    parser.add_argument('--head-num', '-h', type=int, default=128, )
+    parser.add_argument('--head-num', '-q', type=int, default=128, )
     parser.add_argument('--split-num', '-s', type=int, default=8, )
     parser.add_argument('--bind-numa', '-c', type=str, default="0-59", )
 
