@@ -71,10 +71,12 @@ if __name__ == "__main__":
     # 添加参数
     parser.add_argument('--seq-len', '-l', type=int, default=1024, )
     parser.add_argument('--split-num', '-s', type=int, default=8, )
+    parser.add_argument('--bind-numa', '-c', type=str, default="0-59", )
 
     # 解析参数
     args = parser.parse_args()
     seq_len = args.seq_len
     split_num = args.split_num
 
+    torch.ops.sgl_kernel.init_cpu_threads_env(args.bind_numa)
     bm_mla(seq_len, split_num)
