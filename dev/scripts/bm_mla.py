@@ -5,7 +5,7 @@ import sgl_kernel
 
 torch.manual_seed(1234)
 
-def bm_mla(seq_len: int, head_num: int, split_num: int, ):
+def bm_mla(seq_len: int, head_num: int, head_block_size: int, split_num: int, ):
     B = 1
     H_Q = head_num
     H_KV = 1
@@ -15,7 +15,7 @@ def bm_mla(seq_len: int, head_num: int, split_num: int, ):
     dtype = torch.bfloat16
 
     total_tokens = B * seq_len
-    sm_scale = (128 + 64 )**-0.5
+    sm_scale = (128 + 64)**-0.5
     logit_cap = 0.0
 
     # fixed params
@@ -30,11 +30,11 @@ def bm_mla(seq_len: int, head_num: int, split_num: int, ):
     param_list = []
     for _ in range(round):
         q = torch.randn(B, H_Q, D, dtype=dtype)
-        key = torch.randn(B, H_KV, D, dtype=dtype)
-        value = key.narrow(2, 0, D_V)
         k_buffer = torch.randn(total_tokens, H_KV, D, dtype=dtype)
         v_buffer = k_buffer.narrow(2, 0, D_V)
         o = torch.zeros(B, H_Q, D_V, dtype=dtype)
+        key = torch.randn(B, H_KV, D, dtype=dtype)
+        value = key.narrow(2, 0, D_V)
         attn_logits = torch.empty(
             (B, H_Q, split_num, D_V + 1),
             dtype=torch.float32,
@@ -44,7 +44,7 @@ def bm_mla(seq_len: int, head_num: int, split_num: int, ):
     start_time = time.time()
     for param in param_list:
         q, k_buffer, v_buffer, o, key, value, attn_logits = param
-        torch.ops.sgl_kernel.decode_attention_cpu(
+        torch.ops.sgl_kernel.decode_attention_cpu_v2(
             q,
             k_buffer,
             v_buffer,
@@ -58,6 +58,7 @@ def bm_mla(seq_len: int, head_num: int, split_num: int, ):
             b_seq_len,
             sm_scale,
             logit_cap,
+            head_block_size,
         )
     end_time = time.time()
     duration = end_time - start_time
@@ -71,6 +72,7 @@ if __name__ == "__main__":
     # 添加参数
     parser.add_argument('--seq-len', '-l', type=int, default=1024, )
     parser.add_argument('--head-num', '-q', type=int, default=128, )
+    parser.add_argument('--head-block-size', '-b', type=int, default=6, )
     parser.add_argument('--split-num', '-s', type=int, default=8, )
     parser.add_argument('--bind-numa', '-c', type=str, default="0-59", )
 
@@ -78,7 +80,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
     seq_len = args.seq_len
     head_num = args.head_num
+    head_block_size = args.head_block_size
     split_num = args.split_num
 
     torch.ops.sgl_kernel.init_cpu_threads_env(args.bind_numa)
-    bm_mla(seq_len, head_num, split_num)
+    bm_mla(seq_len, head_num, head_block_size, split_num)
