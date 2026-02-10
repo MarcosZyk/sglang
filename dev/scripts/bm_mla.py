@@ -5,9 +5,9 @@ import sgl_kernel
 
 torch.manual_seed(1234)
 
-def bm_mla(seq_len: int, split_num: int, ):
+def bm_mla(seq_len: int, head_num: int, split_num: int, ):
     B = 1
-    H_Q = 128
+    H_Q = head_num
     H_KV = 1
     D = 576
     D_V = 512
@@ -70,13 +70,15 @@ if __name__ == "__main__":
 
     # 添加参数
     parser.add_argument('--seq-len', '-l', type=int, default=1024, )
+    parser.add_argument('--head-num', '-h', type=int, default=128, )
     parser.add_argument('--split-num', '-s', type=int, default=8, )
     parser.add_argument('--bind-numa', '-c', type=str, default="0-59", )
 
     # 解析参数
     args = parser.parse_args()
     seq_len = args.seq_len
+    head_num = args.head_num
     split_num = args.split_num
 
     torch.ops.sgl_kernel.init_cpu_threads_env(args.bind_numa)
-    bm_mla(seq_len, split_num)
+    bm_mla(seq_len, head_num, split_num)
