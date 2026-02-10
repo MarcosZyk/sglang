@@ -1544,7 +1544,7 @@ void decode_attention_cpu_v2(
             max_context_len,
             max_total_num_tokens,
             size_per_thread,
-            int64_t head_block_size);
+            head_block_size);
       } else {
         // GQA/MQA
         decode_attention_grouped_kernel_impl<scalar_t, index_t, BLOCK_N>(
