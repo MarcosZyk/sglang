@@ -23,10 +23,6 @@ def bm_mla(seq_len: int, head_num: int, split_num: int, ):
     req_to_token = torch.arange(total_tokens).reshape(B, seq_len).to(torch.int32)
     b_req_idx = torch.arange(B).to(torch.int64)
     b_seq_len = torch.full((B,), seq_len).to(torch.int64)
-    attn_logits = torch.empty(
-        (B, H_Q, split_num, D_V + 1),
-        dtype=torch.float32,
-    )
 
     # dynamic params
 
@@ -39,11 +35,15 @@ def bm_mla(seq_len: int, head_num: int, split_num: int, ):
         k_buffer = torch.randn(total_tokens, H_KV, D, dtype=dtype)
         v_buffer = k_buffer.narrow(2, 0, D_V)
         o = torch.zeros(B, H_Q, D_V, dtype=dtype)
-        param_list.append((q, k_buffer, v_buffer, o, key, value,))
+        attn_logits = torch.empty(
+            (B, H_Q, split_num, D_V + 1),
+            dtype=torch.float32,
+        )
+        param_list.append((q, k_buffer, v_buffer, o, key, value, attn_logits))
 
     start_time = time.time()
     for param in param_list:
-        q, k_buffer, v_buffer, o, key, value = param
+        q, k_buffer, v_buffer, o, key, value, attn_logits = param
         torch.ops.sgl_kernel.decode_attention_cpu(
             q,
             k_buffer,
