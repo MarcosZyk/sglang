@@ -30,6 +30,11 @@ def bm_core_number(*args, **kwargs):
         bind_numa = f"0-{(i + 1) * 10 - 1}"
         print(f"{bind_numa}\t{result}")
 
+def warm_up(*args, **kwargs):
+    print("=========Warm up==========")
+    torch.ops.sgl_kernel.init_cpu_threads_env('0-119')
+    run_batch(*basic_args)
+    print("=====Finish Warm up=======")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -52,8 +57,9 @@ if __name__ == "__main__":
 
     basic_args = (seq_len, head_num, head_block_size, split_num)
 
-    mode = args.mode
+    warm_up()
 
+    mode = args.mode
     if mode is None:
         bind_numa = args.bind_numa
         torch.ops.sgl_kernel.init_cpu_threads_env(bind_numa)
