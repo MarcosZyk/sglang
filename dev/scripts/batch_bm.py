@@ -19,10 +19,15 @@ def run_batch(*args, **kwargs):
     }
 
 def bm_core_number(*args, **kwargs):
+    result_list = []
     for i in range(1, 12):
         bind_numa = f"0-{i*10}"
         torch.ops.sgl_kernel.init_cpu_threads_env(bind_numa)
         result = run_batch(*args, **kwargs)
+        result_list.append(result)
+
+    for i, result in enumerate(result_list):
+        bind_numa = f"0-{i * 10}"
         print(f"========Core Number {bind_numa}========")
         print(result)
 
@@ -51,6 +56,8 @@ if __name__ == "__main__":
     mode = args.mode
 
     if mode is None:
+        bind_numa = args.bind_numa
+        torch.ops.sgl_kernel.init_cpu_threads_env(bind_numa)
         run_batch(*basic_args)
     elif mode=="core":
         bm_core_number(*basic_args)
