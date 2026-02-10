@@ -33,7 +33,7 @@ def bm_core_number(*args, **kwargs):
         print(f"{bind_numa}\t{result}")
 
 def warm_up(round_name: str, *args, **kwargs):
-    print(f"=========Warm up for {round_name}==========")
+    print(f"=========Warm up {round_name}==========")
     bm_mla(*args, **kwargs)
     print("=====Finish Warm up=======")
 
@@ -62,7 +62,7 @@ if __name__ == "__main__":
     if mode is None:
         bind_numa = args.bind_numa
         torch.ops.sgl_kernel.init_cpu_threads_env(bind_numa)
-        warm_up(*basic_args)
+        warm_up("",*basic_args)
         run_batch(*basic_args)
     elif mode=="core":
         bm_core_number(*basic_args)
