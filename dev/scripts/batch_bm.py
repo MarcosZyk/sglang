@@ -11,25 +11,24 @@ def run_batch(*args, **kwargs):
         latency = bm_mla(*args, **kwargs)
         results.append(latency)
     return {
-        "min": np.min(results),
-        "max": np.max(results),
-        "mean": np.mean(results),
-        "std": np.std(results),
-        "median": np.median(results),
+        "min": np.min(results).real,
+        "max": np.max(results).real,
+        "mean": np.mean(results).real,
+        "std": np.std(results).real,
+        "median": np.median(results).real,
     }
 
 def bm_core_number(*args, **kwargs):
     result_list = []
-    for i in range(1, 12):
-        bind_numa = f"0-{i*10}"
+    for i in range(12):
+        bind_numa = f"0-{(i + 1) * 10 - 1}"
         torch.ops.sgl_kernel.init_cpu_threads_env(bind_numa)
         result = run_batch(*args, **kwargs)
         result_list.append(result)
 
     for i, result in enumerate(result_list):
-        bind_numa = f"0-{i * 10}"
-        print(f"========Core Number {bind_numa}========")
-        print(result)
+        bind_numa = f"0-{(i + 1) * 10 - 1}"
+        print(f"{bind_numa}\t{result}")
 
 
 if __name__ == "__main__":
