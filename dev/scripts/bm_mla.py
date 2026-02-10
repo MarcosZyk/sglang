@@ -1,0 +1,77 @@
+import torch
+import time
+import argparse
+
+def bm_mla(seq_len: int, split_num: int, ):
+    B = 1
+    H_Q = 128
+    H_KV = 1
+    D = 576
+    D_V = 512
+
+    dtype = torch.bfloat16
+
+    total_tokens = B * seq_len
+    sm_scale = (128 + 64 )**-0.5
+    logit_cap = 0.0
+
+    # fixed params
+    loc = torch.randperm(total_tokens)[:B].to(torch.int64)
+    req_to_token = torch.arange(total_tokens).reshape(B, seq_len).to(torch.int32)
+    b_req_idx = torch.arange(B).to(torch.int64)
+    b_seq_len = torch.full((B,), seq_len).to(torch.int64)
+    attn_logits = torch.empty(
+        (B, H_Q, split_num, D_V + 1),
+        dtype=torch.float32,
+    )
+
+    # dynamic params
+
+    round = 61
+    param_list = []
+    for _ in range(round):
+        q = torch.randn(B, H_Q, D, dtype=dtype)
+        key = torch.randn(B, H_KV, D, dtype=dtype)
+        value = key.narrow(2, 0, D_V)
+        k_buffer = torch.randn(total_tokens, H_KV, D, dtype=dtype)
+        v_buffer = k_buffer.narrow(2, 0, D_V)
+        o = torch.zeros(B, H_Q, D_V, dtype=dtype)
+        param_list.append((q, k_buffer, v_buffer, o, key, value,))
+
+    start_time = time.time()
+    for param in param_list:
+        q, k_buffer, v_buffer, o, key, value = param
+        torch.ops.sgl_kernel.decode_attention_cpu(
+            q,
+            k_buffer,
+            v_buffer,
+            o,
+            key,
+            value,
+            loc,
+            attn_logits,
+            req_to_token,
+            b_req_idx,
+            b_seq_len,
+            sm_scale,
+            logit_cap,
+        )
+    end_time = time.time()
+    duration = end_time - start_time
+
+    print(f"Finish decoding {round} rounds in {duration * 1000} ms.", flush=True)
+    print(f"Avg latency {duration * 1000 * 1000 / round} us.", flush=True)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+
+    # 添加参数
+    parser.add_argument('--seq-len', '-l', type=int, default=1024, )
+    parser.add_argument('--split-num', '-s', type=int, default=8, )
+
+    # 解析参数
+    args = parser.parse_args()
+    seq_len = args.seq_len
+    split_num = args.split_num
+
+    bm_mla(seq_len, split_num)
