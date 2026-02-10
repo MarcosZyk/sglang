@@ -1,6 +1,9 @@
 import torch
 import time
 import argparse
+import sgl_kernel
+
+torch.manual_seed(1234)
 
 def bm_mla(seq_len: int, split_num: int, ):
     B = 1
