@@ -1,3 +1,4 @@
+l=1024; q=32; b=6; s=8
 =========Warm up 0-9==========
 Finish decoding 61 rounds in 15.080451965332031 ms.
 Avg latency 247.22052402183658 us.
