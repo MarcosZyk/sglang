@@ -28,6 +28,8 @@ def bm_core_number(*args, **kwargs):
         result = run_batch(*args, **kwargs)
         result_list.append(result)
 
+    seq_len, head_num, head_block_size, split_num = args
+    print(f"l={seq_len}; q={head_num}; b={head_block_size}; s={split_num}")
     for i, result in enumerate(result_list):
         bind_numa = f"0-{(i + 1) * 10 - 1}"
         print(f"{bind_numa}\t{result}")
