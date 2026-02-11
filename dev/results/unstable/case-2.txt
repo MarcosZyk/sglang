@@ -1,0 +1,288 @@
+=========Warm up 0-9==========
+Finish decoding 61 rounds in 15.080451965332031 ms.
+Avg latency 247.22052402183658 us.
+=====Finish Warm up=======
+Finish decoding 61 rounds in 18.059492111206055 ms.
+Avg latency 296.05724772468943 us.
+Finish decoding 61 rounds in 11.641740798950195 ms.
+Avg latency 190.84820981885565 us.
+Finish decoding 61 rounds in 10.377168655395508 ms.
+Avg latency 170.11751894090997 us.
+Finish decoding 61 rounds in 11.062145233154297 ms.
+Avg latency 181.34664316646388 us.
+Finish decoding 61 rounds in 10.738134384155273 ms.
+Avg latency 176.0349899041848 us.
+Finish decoding 61 rounds in 10.879278182983398 ms.
+Avg latency 178.34882267185898 us.
+Finish decoding 61 rounds in 11.013507843017578 ms.
+Avg latency 180.5493089019275 us.
+Finish decoding 61 rounds in 10.218143463134766 ms.
+Avg latency 167.51054857597975 us.
+Finish decoding 61 rounds in 10.42318344116211 ms.
+Avg latency 170.87185969118212 us.
+Finish decoding 61 rounds in 10.592222213745117 ms.
+Avg latency 173.6429871105757 us.
+=========Warm up 0-19==========
+Finish decoding 61 rounds in 10.268449783325195 ms.
+Avg latency 168.33524234959336 us.
+=====Finish Warm up=======
+Finish decoding 61 rounds in 8.191347122192383 ms.
+Avg latency 134.28437905233415 us.
+Finish decoding 61 rounds in 9.276866912841797 ms.
+Avg latency 152.0797854564229 us.
+Finish decoding 61 rounds in 8.297920227050781 ms.
+Avg latency 136.03147913198 us.
+Finish decoding 61 rounds in 8.042335510253906 ms.
+Avg latency 131.84156574186733 us.
+Finish decoding 61 rounds in 8.348464965820312 ms.
+Avg latency 136.86008140689037 us.
+Finish decoding 61 rounds in 8.066654205322266 ms.
+Avg latency 132.2402328741355 us.
+Finish decoding 61 rounds in 8.592605590820312 ms.
+Avg latency 140.8623867347592 us.
+Finish decoding 61 rounds in 8.10861587524414 ms.
+Avg latency 132.92812910236296 us.
+Finish decoding 61 rounds in 8.07809829711914 ms.
+Avg latency 132.42784093637937 us.
+Finish decoding 61 rounds in 8.15129280090332 ms.
+Avg latency 133.62775083448065 us.
+=========Warm up 0-29==========
+Finish decoding 61 rounds in 21.680593490600586 ms.
+Avg latency 355.41956541968176 us.
+=====Finish Warm up=======
+Finish decoding 61 rounds in 8.575201034545898 ms.
+Avg latency 140.5770661400967 us.
+Finish decoding 61 rounds in 5.643606185913086 ms.
+Avg latency 92.5181341952965 us.
+Finish decoding 61 rounds in 7.4062347412109375 ms.
+Avg latency 121.41368428214652 us.
+Finish decoding 61 rounds in 7.291555404663086 ms.
+Avg latency 119.53369515841125 us.
+Finish decoding 61 rounds in 6.252288818359375 ms.
+Avg latency 102.4965380058914 us.
+Finish decoding 61 rounds in 6.815910339355469 ms.
+Avg latency 111.73623507140113 us.
+Finish decoding 61 rounds in 6.498575210571289 ms.
+Avg latency 106.53401984543096 us.
+Finish decoding 61 rounds in 6.461381912231445 ms.
+Avg latency 105.92429364313844 us.
+Finish decoding 61 rounds in 6.3304901123046875 ms.
+Avg latency 103.77852643122438 us.
+Finish decoding 61 rounds in 6.456851959228516 ms.
+Avg latency 105.85003211850025 us.
+=========Warm up 0-39==========
+Finish decoding 61 rounds in 9.591341018676758 ms.
+Avg latency 157.2350986668321 us.
+=====Finish Warm up=======
+Finish decoding 61 rounds in 6.707429885864258 ms.
+Avg latency 109.95786698138127 us.
+Finish decoding 61 rounds in 6.883859634399414 ms.
+Avg latency 112.850157940974 us.
+Finish decoding 61 rounds in 6.476163864135742 ms.
+Avg latency 106.16662072353675 us.
+Finish decoding 61 rounds in 6.717920303344727 ms.
+Avg latency 110.12984103843814 us.
+Finish decoding 61 rounds in 6.91676139831543 ms.
+Avg latency 113.38953111992508 us.
+Finish decoding 61 rounds in 9.012460708618164 ms.
+Avg latency 147.74525751833056 us.
+Finish decoding 61 rounds in 6.68787956237793 ms.
+Avg latency 109.63736987504802 us.
+Finish decoding 61 rounds in 6.749868392944336 ms.
+Avg latency 110.65358021220223 us.
+Finish decoding 61 rounds in 6.792545318603516 ms.
+Avg latency 111.35320194431993 us.
+Finish decoding 61 rounds in 6.709575653076172 ms.
+Avg latency 109.993043493052 us.
+=========Warm up 0-49==========
+Finish decoding 61 rounds in 11.206626892089844 ms.
+Avg latency 183.7151949522925 us.
+=====Finish Warm up=======
+Finish decoding 61 rounds in 5.289316177368164 ms.
+Avg latency 86.71010126833056 us.
+Finish decoding 61 rounds in 5.178213119506836 ms.
+Avg latency 84.8887396640465 us.
+Finish decoding 61 rounds in 5.369424819946289 ms.
+Avg latency 88.02335770403752 us.
+Finish decoding 61 rounds in 5.486726760864258 ms.
+Avg latency 89.94634034203702 us.
+Finish decoding 61 rounds in 8.363485336303711 ms.
+Avg latency 137.10631698858543 us.
+Finish decoding 61 rounds in 5.508184432983398 ms.
+Avg latency 90.29810545874423 us.
+Finish decoding 61 rounds in 5.36799430847168 ms.
+Avg latency 87.99990669625704 us.
+Finish decoding 61 rounds in 5.124092102050781 ms.
+Avg latency 84.00150986968494 us.
+Finish decoding 61 rounds in 5.162715911865234 ms.
+Avg latency 84.63468707975794 us.
+Finish decoding 61 rounds in 9.43136215209961 ms.
+Avg latency 154.6124942967149 us.
+=========Warm up 0-59==========
+Finish decoding 61 rounds in 7.546663284301758 ms.
+Avg latency 123.71579154593046 us.
+=====Finish Warm up=======
+Finish decoding 61 rounds in 5.601406097412109 ms.
+Avg latency 91.82632946577229 us.
+Finish decoding 61 rounds in 5.726337432861328 ms.
+Avg latency 93.87438414526767 us.
+Finish decoding 61 rounds in 7.5664520263671875 ms.
+Avg latency 124.04019715356046 us.
+Finish decoding 61 rounds in 5.305051803588867 ms.
+Avg latency 86.96806235391585 us.
+Finish decoding 61 rounds in 5.503177642822266 ms.
+Avg latency 90.21602693151254 us.
+Finish decoding 61 rounds in 5.185842514038086 ms.
+Avg latency 85.0138117055424 us.
+Finish decoding 61 rounds in 8.573055267333984 ms.
+Avg latency 140.54188962842596 us.
+Finish decoding 61 rounds in 5.319833755493164 ms.
+Avg latency 87.21038943431417 us.
+Finish decoding 61 rounds in 5.328178405761719 ms.
+Avg latency 87.34718697970031 us.
+Finish decoding 61 rounds in 5.357503890991211 ms.
+Avg latency 87.82793263920018 us.
+=========Warm up 0-69==========
+Finish decoding 61 rounds in 9.059667587280273 ms.
+Avg latency 148.51914077508644 us.
+=====Finish Warm up=======
+Finish decoding 61 rounds in 5.239725112915039 ms.
+Avg latency 85.89713299860719 us.
+Finish decoding 61 rounds in 5.316495895385742 ms.
+Avg latency 87.15567041615971 us.
+Finish decoding 61 rounds in 5.300283432006836 ms.
+Avg latency 86.88989232798092 us.
+Finish decoding 61 rounds in 10.028839111328125 ms.
+Avg latency 164.4071985463627 us.
+Finish decoding 61 rounds in 4.142999649047852 ms.
+Avg latency 67.91802703357133 us.
+Finish decoding 61 rounds in 5.257368087768555 ms.
+Avg latency 86.18636209456648 us.
+Finish decoding 61 rounds in 8.77523422241211 ms.
+Avg latency 143.85629872806737 us.
+Finish decoding 61 rounds in 5.45954704284668 ms.
+Avg latency 89.50077119420786 us.
+Finish decoding 61 rounds in 5.262851715087891 ms.
+Avg latency 86.27625762439165 us.
+Finish decoding 61 rounds in 5.303382873535156 ms.
+Avg latency 86.94070284483863 us.
+=========Warm up 0-79==========
+Finish decoding 61 rounds in 13.489007949829102 ms.
+Avg latency 221.13127786605085 us.
+=====Finish Warm up=======
+Finish decoding 61 rounds in 5.386114120483398 ms.
+Avg latency 88.29695279480981 us.
+Finish decoding 61 rounds in 5.303859710693359 ms.
+Avg latency 86.94851984743212 us.
+Finish decoding 61 rounds in 9.566783905029297 ms.
+Avg latency 156.83252303326717 us.
+Finish decoding 61 rounds in 5.3653717041015625 ms.
+Avg latency 87.95691318199283 us.
+Finish decoding 61 rounds in 5.374431610107422 ms.
+Avg latency 88.10543623126921 us.
+Finish decoding 61 rounds in 9.508609771728516 ms.
+Avg latency 155.87884871686092 us.
+Finish decoding 61 rounds in 5.259275436401367 ms.
+Avg latency 86.21763010494044 us.
+Finish decoding 61 rounds in 5.359411239624023 ms.
+Avg latency 87.85920064957415 us.
+Finish decoding 61 rounds in 9.858131408691406 ms.
+Avg latency 161.6087116178919 us.
+Finish decoding 61 rounds in 5.423545837402344 ms.
+Avg latency 88.91058749839908 us.
+=========Warm up 0-89==========
+Finish decoding 61 rounds in 7.5397491455078125 ms.
+Avg latency 123.60244500832479 us.
+=====Finish Warm up=======
+Finish decoding 61 rounds in 29.941320419311523 ms.
+Avg latency 490.84131834936926 us.
+Finish decoding 61 rounds in 5.363702774047852 ms.
+Avg latency 87.9295536729156 us.
+Finish decoding 61 rounds in 8.260011672973633 ms.
+Avg latency 135.41002742579727 us.
+Finish decoding 61 rounds in 5.523920059204102 ms.
+Avg latency 90.55606654432954 us.
+Finish decoding 61 rounds in 5.754709243774414 ms.
+Avg latency 94.33949579958056 us.
+Finish decoding 61 rounds in 8.841753005981445 ms.
+Avg latency 144.94677058985977 us.
+Finish decoding 61 rounds in 5.278587341308594 ms.
+Avg latency 86.53421870997694 us.
+Finish decoding 61 rounds in 6.080389022827148 ms.
+Avg latency 99.67850857093686 us.
+Finish decoding 61 rounds in 9.44972038269043 ms.
+Avg latency 154.91344889656443 us.
+Finish decoding 61 rounds in 5.360126495361328 ms.
+Avg latency 87.8709261534644 us.
+=========Warm up 0-99==========
+Finish decoding 61 rounds in 9.482860565185547 ms.
+Avg latency 155.45673057681225 us.
+=====Finish Warm up=======
+Finish decoding 61 rounds in 5.30695915222168 ms.
+Avg latency 86.99933036428983 us.
+Finish decoding 61 rounds in 5.416393280029297 ms.
+Avg latency 88.79333245949667 us.
+Finish decoding 61 rounds in 10.618448257446289 ms.
+Avg latency 174.07292225321785 us.
+Finish decoding 61 rounds in 5.418539047241211 ms.
+Avg latency 88.8285089711674 us.
+Finish decoding 61 rounds in 8.524894714355469 ms.
+Avg latency 139.7523723664831 us.
+Finish decoding 61 rounds in 6.06226921081543 ms.
+Avg latency 99.38146247238409 us.
+Finish decoding 61 rounds in 5.2585601806640625 ms.
+Avg latency 86.20590460105021 us.
+Finish decoding 61 rounds in 20.65420150756836 ms.
+Avg latency 338.5934673371862 us.
+Finish decoding 61 rounds in 5.361795425415039 ms.
+Avg latency 87.89828566254162 us.
+Finish decoding 61 rounds in 8.87608528137207 ms.
+Avg latency 145.5095947765913 us.
+=========Warm up 0-109==========
+Finish decoding 61 rounds in 7.224321365356445 ms.
+Avg latency 118.4314977927286 us.
+=====Finish Warm up=======
+Finish decoding 61 rounds in 5.824804306030273 ms.
+Avg latency 95.48859518082415 us.
+Finish decoding 61 rounds in 11.76309585571289 ms.
+Avg latency 192.83763697889984 us.
+Finish decoding 61 rounds in 5.27501106262207 ms.
+Avg latency 86.47559119052575 us.
+Finish decoding 61 rounds in 9.333372116088867 ms.
+Avg latency 153.00610026375193 us.
+Finish decoding 61 rounds in 5.336999893188477 ms.
+Avg latency 87.49180152767994 us.
+Finish decoding 61 rounds in 8.925914764404297 ms.
+Avg latency 146.32647154761142 us.
+Finish decoding 61 rounds in 11.502265930175781 ms.
+Avg latency 188.5617365602587 us.
+Finish decoding 61 rounds in 21.408796310424805 ms.
+Avg latency 350.96387394139026 us.
+Finish decoding 61 rounds in 5.275487899780273 ms.
+Avg latency 86.48340819311923 us.
+Finish decoding 61 rounds in 5.466461181640625 ms.
+Avg latency 89.61411773181352 us.
+=========Warm up 0-119==========
+Finish decoding 61 rounds in 13.753890991210938 ms.
+Avg latency 225.47362280673667 us.
+=====Finish Warm up=======
+Finish decoding 61 rounds in 5.371809005737305 ms.
+Avg latency 88.062442717005 us.
+Finish decoding 61 rounds in 9.662151336669922 ms.
+Avg latency 158.39592355196592 us.
+Finish decoding 61 rounds in 5.62739372253418 ms.
+Avg latency 92.2523561071177 us.
+Finish decoding 61 rounds in 9.355545043945312 ms.
+Avg latency 153.36959088434938 us.
+Finish decoding 61 rounds in 5.804538726806641 ms.
+Avg latency 95.15637257060067 us.
+Finish decoding 61 rounds in 9.34290885925293 ms.
+Avg latency 153.1624403156218 us.
+Finish decoding 61 rounds in 5.504369735717773 ms.
+Avg latency 90.23556943799629 us.
+Finish decoding 61 rounds in 8.974552154541016 ms.
+Avg latency 147.1238058121478 us.
+Finish decoding 61 rounds in 5.600214004516602 ms.
+Avg latency 91.80678695928854 us.
+Finish decoding 61 rounds in 9.12165641784668 ms.
+Avg latency 149.53535111224065 us.
