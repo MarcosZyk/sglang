@@ -171,14 +171,19 @@ class ArtesiaRadixCache(RadixCache):
             self._record_store_event(new_node.parent)
             self._record_store_event(new_node)
 
-            return MatchResult(
-                device_indices=value,
-                last_device_node=last_node,
-                last_host_node=last_node,
-            )
+            res = MatchResult(
+                    device_indices=value,
+                    last_device_node=last_node,
+                    last_host_node=last_node,
+                )
+
+            logger.info(f"Finish retrieve and return {res}")
+
+            return res
         else:
             self.token_to_kv_pool_allocator.free(token_slots)
             logger.info(f"Finish slot free after in short of {-delta} tokens.")
+            logger.info(f"Finish slot free and return {base_res}")
             return base_res
 
     def cache_finished_req(self, req: "Req") -> None:  # type: ignore[override]
