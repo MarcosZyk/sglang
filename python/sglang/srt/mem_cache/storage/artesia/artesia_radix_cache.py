@@ -139,6 +139,7 @@ class ArtesiaRadixCache(RadixCache):
         if token_slots is None:
             return base_res
 
+        logger.info(f"Try load {len(key)} tokens from Artesia")
         context = ContextDescription(token_ids=key, offset=value.numel())
         semantics = SemanticDescription(tag_list=[])
         num_retrieved = self.artesia_connector.load_kv(
@@ -192,6 +193,7 @@ class ArtesiaRadixCache(RadixCache):
         assert new_last_node is not None
 
         self.inc_lock_ref(new_last_node)
+        logger.info(f"Start offload {len(token_ids)} tokens to Artesia")
         context = ContextDescription(token_ids=token_ids, offset=0)
         semantics = SemanticDescription(tag_list=[])
         self.artesia_connector.offload_kv(

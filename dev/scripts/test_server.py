@@ -55,10 +55,10 @@ def main():
         base_url=openai_api_base,
     )
     # test_prompt = "San Francisco is a"
-    prompt_1 = "Please give some more content based on the following content. San Francisco is a  city that has been around for over 100 years. It was founded in 1849 by the Gold Rush, and it's still growing today. The city is home to many different neighborhoods and districts, each with their own unique character and culture. One of the most popular neighborhoods in San Francisco is Chinatown. This neighborhood is known for its vibrant Chinese-American community, as well as its delicious cuisine and cultural events. If you're visiting San Francisco during your trip, don't miss out on exploring this beloved neighborhood!"
+    prompt_1 = "Please give some more content based on the following content. Do not think too much time! San Francisco is a  city that has been around for over 100 years. It was founded in 1849 by the Gold Rush, and it's still growing today. The city is home to many different neighborhoods and districts, each with their own unique character and culture. One of the most popular neighborhoods in San Francisco is Chinatown. This neighborhood is known for its vibrant Chinese-American community, as well as its delicious cuisine and cultural events. If you're visiting San Francisco during your trip, don't miss out on exploring this beloved neighborhood!"
     do_conversation(client, args.model, prompt_1)
 
-    prompt_2 = "Please give some more content based on the following content. New York is a city that has been around for over 100 years. The city is home to many different neighborhoods and districts, each with their own unique character and culture. One of the most popular neighborhoods in San Francisco is Chinatown. This neighborhood is known for its vibrant Chinese-American community, as well as its delicious cuisine and cultural events."
+    prompt_2 = "Please give some more content based on the following content. Do not think too much time! New York is a city that has been around for over 100 years. The city is home to many different neighborhoods and districts, each with their own unique character and culture. One of the most popular neighborhoods in San Francisco is Chinatown. This neighborhood is known for its vibrant Chinese-American community, as well as its delicious cuisine and cultural events."
     do_conversation(client, args.model, prompt_2)
 
 if __name__ == "__main__":
