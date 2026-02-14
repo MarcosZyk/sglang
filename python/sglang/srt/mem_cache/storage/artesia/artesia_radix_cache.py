@@ -148,6 +148,7 @@ class ArtesiaRadixCache(RadixCache):
             kv_indices=torch.cat([value, token_slots]),
         )
         delta = num_retrieved - value.numel()
+        logger.info("num_retrieved_tokens: %s", delta)
         if delta > 0:
             logger.debug("num_retrieved_tokens: %s", delta)
             prefix_pad = num_retrieved % self.page_size
