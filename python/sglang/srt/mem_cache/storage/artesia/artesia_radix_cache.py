@@ -91,6 +91,12 @@ class ArtesiaRadixCache(RadixCache):
             kv_pool=self.kv_pool,
         )
         self.artesia_connector.open()
+        logger.info(
+            f"Open Artesia connection with config: "
+            f"local_rank={device.index}, "
+            f"device={device}, "
+            f"model_description={self.model_description}"
+        )
 
 
         self._in_flight_nodes: list[TreeNode] = []
