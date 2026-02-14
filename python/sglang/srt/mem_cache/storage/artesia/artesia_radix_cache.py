@@ -1,0 +1,219 @@
+from __future__ import annotations
+
+import logging
+import threading
+from typing import TYPE_CHECKING, List, Optional
+
+import torch
+
+from sglang.srt.mem_cache.allocator import BaseTokenToKVPoolAllocator
+from sglang.srt.mem_cache.base_prefix_cache import MatchResult
+from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
+from sglang.srt.mem_cache.radix_cache import RadixCache, TreeNode
+
+try:
+    from artesia.connector.connector import (
+        ArtesiaConnector,
+        ModelDescription,
+        ContextDescription,
+        SemanticDescription,
+    )
+except ImportError as e:
+    raise RuntimeError(
+        "Artesia is not installed."
+    ) from e
+
+if TYPE_CHECKING:
+    from sglang.srt.configs.model_config import ModelConfig
+    from sglang.srt.managers.schedule_batch import Req
+
+logger = logging.getLogger(__name__)
+
+
+class ArtesiaRadixCache(RadixCache):
+    """RadixCache + LMCache IO.
+
+    This subclass adds:
+      - LMCache connector setup (device/host buffers, TP rank/size)
+      - Two CUDA streams for async load/store
+      - Layer-wise transfer executor wiring to the KV cache
+      - Overridden `match_prefix` to fetch missing prefix chunks from LMCache
+      - Extended cache_finalization paths to store back into LMCache
+      - Eviction barrier that respects any in-flight host->device stores
+    """
+
+    def __init__(
+        self,
+        req_to_token_pool: ReqToTokenPool,
+        token_to_kv_pool_allocator: BaseTokenToKVPoolAllocator,
+        page_size: int,
+        disable: bool = False,
+        enable_kv_cache_events: bool = False,
+        model_config: Optional["ModelConfig"] = None,
+        tp_size: int = 1,
+        rank: int = 0,
+        tp_group: Optional[torch.distributed.ProcessGroup] = None,
+    ):
+        super().__init__(
+            req_to_token_pool=req_to_token_pool,
+            token_to_kv_pool_allocator=token_to_kv_pool_allocator,
+            page_size=page_size,
+            disable=disable,
+            enable_kv_cache_events=enable_kv_cache_events,
+        )
+
+        # Currently, we only support MHATokenToKVPool, which supports model using MHA/GQA/MQA
+        kvcache = self.token_to_kv_pool_allocator.get_kvcache()
+        self.k_pool = getattr(
+            kvcache,
+            "k_buffer",
+            getattr(self.token_to_kv_pool_allocator._kvcache, "k_buffer"),
+        )
+        self.v_pool=getattr(
+            kvcache,
+            "v_buffer",
+            getattr(self.token_to_kv_pool_allocator._kvcache, "v_buffer"),
+        )
+        self.kv_pool = [self.k_pool, self.v_pool]
+
+        self.model_description = ModelDescription(
+            model_name=f"{model_config.model_path}-{rank}",
+            dtype=kvcache.store_dtype,
+            layer_num=kvcache.layer_num,
+            kv_shape=torch.Size(2, kvcache.head_num, kvcache.head_dim),
+        )
+
+        device = self.k_pool[0].device
+        self.artesia_connector = ArtesiaConnector(
+            local_rank=device.index,
+            device=device,
+            model=self.model_description,
+            kv_pool=self.kv_pool,
+        )
+        self.artesia_connector.open()
+
+
+        self._in_flight_nodes: list[TreeNode] = []
+        self._node_lock = threading.Lock()
+
+    def reset(self):  # type: ignore[override]
+        super().reset()
+        if hasattr(self, "_in_flight_nodes"):
+            with self._node_lock:
+                self._in_flight_nodes.clear()
+
+    def match_prefix(self, key: List[int], **kwargs) -> MatchResult:  # type: ignore[override]
+        """Match cached prefix; if there's a tail miss, prefetch from LMCache.
+
+        Reuses the base matching logic to obtain (value, last_node). If there
+        remains a *page-aligned* uncached suffix and there is room (or after
+        eviction), we allocate token slots and trigger an async LMCache load
+        into those slots, then materialize a new child node for the retrieved
+        chunk.
+        """
+        if self.disable or not key:
+            return super().match_prefix(key, **kwargs)
+
+        if self.page_size != 1:
+            aligned_len = len(key) // self.page_size * self.page_size
+            key = key[:aligned_len]
+
+        base_res = super().match_prefix(key, **kwargs)
+        value: torch.Tensor = base_res.device_indices
+        last_node: TreeNode = base_res.last_device_node
+
+        uncached_len = len(key) - value.numel()
+        if uncached_len == 0:
+            return base_res
+
+        if self.token_to_kv_pool_allocator.available_size() < uncached_len:
+            self.evict(uncached_len)
+
+        token_slots = self.token_to_kv_pool_allocator.alloc(uncached_len)
+        if token_slots is None:
+            return base_res
+
+        context = ContextDescription(token_ids=key, offset=value.numel())
+        semantics = SemanticDescription(tag_list=[])
+        num_retrieved = self.artesia_connector.load_kv(
+            context=context,
+            semantics=semantics,
+            kv_indices=token_slots,
+        )
+        logger.debug("num_retrieved_tokens: %s", num_retrieved)
+
+        if num_retrieved > 0:
+            prefix_pad = num_retrieved % self.page_size
+            self.token_to_kv_pool_allocator.free(
+                token_slots[(num_retrieved - prefix_pad) :]
+            )
+            fetched = num_retrieved - prefix_pad
+            new_node = TreeNode()
+            start = value.numel()
+            end = start + fetched
+            new_node.key = key[start:end]
+            new_node.value = token_slots[:fetched]
+            new_node.parent = last_node
+            last_node.children[self.get_child_key_fn(new_node.key)] = new_node
+            last_node = new_node
+
+            value = torch.cat([value, token_slots[:fetched]])
+            self.evictable_size_ += fetched
+
+            self._record_store_event(new_node.parent)
+            self._record_store_event(new_node)
+
+            return MatchResult(
+                device_indices=value,
+                last_device_node=last_node,
+                last_host_node=last_node,
+            )
+        else:
+            self.token_to_kv_pool_allocator.free(token_slots)
+            return base_res
+
+    def cache_finished_req(self, req: "Req") -> None:  # type: ignore[override]
+        """On request completion, insert device KV into radix and store to LMCache."""
+
+        super().cache_finished_req(req)
+
+        token_ids = (req.origin_input_ids + req.output_ids)[:-1]
+        kv_indices = self.req_to_token_pool.req_to_token[
+            req.req_pool_idx, : len(token_ids)
+        ]
+
+        _, new_last_node, _, _ = super().match_prefix(token_ids)
+        assert new_last_node is not None
+
+        self.inc_lock_ref(new_last_node)
+        context = ContextDescription(token_ids=token_ids, offset=0)
+        semantics = SemanticDescription(tag_list=[])
+        self.artesia_connector.offload_kv(
+            context=context,
+            semantics=semantics,
+            kv_indices=kv_indices,
+        )
+
+        with self._node_lock:
+            self._in_flight_nodes.append(new_last_node)
+
+    def evict(self, num_tokens: int) -> None:  # type: ignore[override]
+        """Before base eviction, wait for any outstanding stores and release locks."""
+        if self.disable:
+            return
+
+        with self._node_lock:
+            for node in self._in_flight_nodes:
+                self.dec_lock_ref(node)
+            self._in_flight_nodes.clear()
+
+        super().evict(num_tokens)
+
+    def pretty_print(self):  # type: ignore[override]
+        super().pretty_print()
+        try:
+            logger.debug(
+                "evictable=%d protected=%d", self.evictable_size_, self.protected_size_
+            )
+        except Exception:  # pragma: no cover
+            pass

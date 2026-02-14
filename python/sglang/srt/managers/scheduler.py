@@ -620,6 +620,21 @@ class Scheduler(
                 self.tp_worker.register_hicache_layer_transfer_counter(
                     self.tree_cache.cache_controller.layer_done_counter
                 )
+            elif server_args.enable_artesia:
+                from sglang.srt.mem_cache.storage.artesia.artesia_radix_cache import (
+                    ArtesiaRadixCache,
+                )
+
+                self.tree_cache = ArtesiaRadixCache(
+                    req_to_token_pool=self.req_to_token_pool,
+                    token_to_kv_pool_allocator=self.token_to_kv_pool_allocator,
+                    page_size=self.page_size,
+                    disable=server_args.disable_radix_cache,
+                    model_config=self.model_config,
+                    tp_size=self.tp_size,
+                    rank=self.tp_rank,
+                    tp_group=self.tp_group,
+                )
             elif self.is_hybrid:
                 assert (
                     self.server_args.disaggregation_mode == "null"

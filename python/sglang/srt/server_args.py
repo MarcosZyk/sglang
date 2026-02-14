@@ -194,6 +194,8 @@ class ServerArgs:
     hicache_write_policy: str = "write_through_selective"
     hicache_io_backend: str = ""
     hicache_storage_backend: Optional[str] = None
+    # Artesia
+    enable_artesia: bool = False
 
     # Double Sparsity
     enable_double_sparsity: bool = False
@@ -1428,6 +1430,13 @@ class ServerArgs:
             choices=["file"],  # todo, mooncake
             default=ServerArgs.hicache_storage_backend,
             help="The storage backend for hierarchical KV cache.",
+        )
+
+        # Artesia
+        parser.add_argument(
+            "--enable-artesia",
+            action="store_true",
+            help="Using Artesia as an alternative hierarchical cache solution",
         )
 
         # Double Sparsity
