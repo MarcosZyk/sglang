@@ -138,11 +138,11 @@ class ArtesiaRadixCache(RadixCache):
         num_retrieved = self.artesia_connector.load_kv(
             context=context,
             semantics=semantics,
-            kv_indices=token_slots,
+            kv_indices=torch.cat([value, token_slots]),
         )
-        logger.debug("num_retrieved_tokens: %s", num_retrieved)
-
-        if num_retrieved > 0:
+        delta = num_retrieved - value.numel()
+        if delta > 0:
+            logger.debug("num_retrieved_tokens: %s", delta)
             prefix_pad = num_retrieved % self.page_size
             self.token_to_kv_pool_allocator.free(
                 token_slots[(num_retrieved - prefix_pad) :]
