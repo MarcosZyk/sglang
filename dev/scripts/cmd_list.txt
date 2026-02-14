@@ -1,0 +1,7 @@
+python clean_shared_memory.py
+
+nohup bash launch_server.sh >sgl.log
+
+nohup bash launch_data_plane.sh >dp.log &
+
+nohup bash launch_control_plane.sh >cp.log &
