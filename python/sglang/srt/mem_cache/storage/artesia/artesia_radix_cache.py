@@ -148,7 +148,7 @@ class ArtesiaRadixCache(RadixCache):
             kv_indices=torch.cat([value, token_slots]),
         )
         delta = num_retrieved - value.numel()
-        logger.info("num_retrieved_tokens: %s", delta)
+        logger.info("Retrieved token num %s, valid %s", num_retrieved, delta)
         if delta > 0:
             logger.debug("num_retrieved_tokens: %s", delta)
             prefix_pad = num_retrieved % self.page_size
@@ -171,19 +171,13 @@ class ArtesiaRadixCache(RadixCache):
             self._record_store_event(new_node.parent)
             self._record_store_event(new_node)
 
-            res = MatchResult(
+            return MatchResult(
                     device_indices=value,
                     last_device_node=last_node,
                     last_host_node=last_node,
                 )
-
-            logger.info(f"Finish retrieve and return {res}")
-
-            return res
         else:
             self.token_to_kv_pool_allocator.free(token_slots)
-            logger.info(f"Finish slot free after in short of {-delta} tokens.")
-            logger.info(f"Finish slot free and return {base_res}")
             return base_res
 
     def cache_finished_req(self, req: "Req") -> None:  # type: ignore[override]
