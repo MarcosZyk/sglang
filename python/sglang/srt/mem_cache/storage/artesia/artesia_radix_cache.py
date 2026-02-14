@@ -178,6 +178,7 @@ class ArtesiaRadixCache(RadixCache):
             )
         else:
             self.token_to_kv_pool_allocator.free(token_slots)
+            logger.info(f"Finish slot free after in short of {-delta} tokens.")
             return base_res
 
     def cache_finished_req(self, req: "Req") -> None:  # type: ignore[override]
