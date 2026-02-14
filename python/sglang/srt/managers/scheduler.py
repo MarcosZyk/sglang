@@ -1523,7 +1523,7 @@ class Scheduler(
             protected_size = self.tree_cache.protected_size()
             memory_leak = (available_size + evictable_size) != (
                 self.max_total_num_tokens
-                if not self.enable_hierarchical_cache or not self.server_args.enable_artesia
+                if not self.enable_hierarchical_cache and not self.server_args.enable_artesia
                 else self.max_total_num_tokens - protected_size
             )
             token_msg = f"{self.max_total_num_tokens=}, {available_size=}, {evictable_size=}, {protected_size=}\n"
