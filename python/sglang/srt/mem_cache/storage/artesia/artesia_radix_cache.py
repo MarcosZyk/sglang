@@ -98,15 +98,7 @@ class ArtesiaRadixCache(RadixCache):
             f"model_description={self.model_description}"
         )
 
-
-        self._in_flight_nodes: list[TreeNode] = []
         self._node_lock = threading.Lock()
-
-    def reset(self):  # type: ignore[override]
-        super().reset()
-        if hasattr(self, "_in_flight_nodes"):
-            with self._node_lock:
-                self._in_flight_nodes.clear()
 
     def match_prefix(self, key: List[int], **kwargs) -> MatchResult:  # type: ignore[override]
         """Match cached prefix; if there's a tail miss, prefetch from LMCache.
@@ -183,17 +175,11 @@ class ArtesiaRadixCache(RadixCache):
     def cache_finished_req(self, req: "Req") -> None:  # type: ignore[override]
         """On request completion, insert device KV into radix and store to LMCache."""
 
-        super().cache_finished_req(req)
-
         token_ids = (req.origin_input_ids + req.output_ids)[:-1]
         kv_indices = self.req_to_token_pool.req_to_token[
             req.req_pool_idx, : len(token_ids)
         ]
 
-        _, new_last_node, _, _ = super().match_prefix(token_ids)
-        assert new_last_node is not None
-
-        self.inc_lock_ref(new_last_node)
         logger.info(f"Start offload {len(token_ids)} tokens to Artesia")
         context = ContextDescription(token_ids=token_ids, offset=0)
         semantics = SemanticDescription(tag_list=[])
@@ -203,20 +189,7 @@ class ArtesiaRadixCache(RadixCache):
             kv_indices=kv_indices,
         )
 
-        with self._node_lock:
-            self._in_flight_nodes.append(new_last_node)
-
-    def evict(self, num_tokens: int) -> None:  # type: ignore[override]
-        """Before base eviction, wait for any outstanding stores and release locks."""
-        if self.disable:
-            return
-
-        with self._node_lock:
-            for node in self._in_flight_nodes:
-                self.dec_lock_ref(node)
-            self._in_flight_nodes.clear()
-
-        super().evict(num_tokens)
+        super().cache_finished_req(req)
 
     def pretty_print(self):  # type: ignore[override]
         super().pretty_print()
