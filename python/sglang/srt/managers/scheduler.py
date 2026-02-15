@@ -816,7 +816,7 @@ class Scheduler(
             self.cur_batch = batch
 
             if batch:
-                result = self.run_batch(batch)
+                result, batch = self.run_batch(batch)
                 self.process_batch_result(batch, result)
             else:
                 # When the server is idle, do self-check and re-init some states
@@ -841,7 +841,7 @@ class Scheduler(
 
             if batch:
                 batch.launch_done = threading.Event()
-                result = self.run_batch(batch)
+                result, batch = self.run_batch(batch)
                 self.result_queue.append((batch.copy(), result))
 
                 if self.last_batch is None:
@@ -897,7 +897,7 @@ class Scheduler(
                 self.cur_batch = mbs[mb_id]
                 if self.cur_batch:
                     server_is_idle = False
-                    result = self.run_batch(self.cur_batch)
+                    result, self.cur_batch = self.run_batch(self.cur_batch)
 
                 # (last rank) send the outputs to the next step
                 if self.pp_group.is_last_rank:
@@ -1882,6 +1882,9 @@ class Scheduler(
         if self.forward_sleep_time is not None:
             logger.info(f"Scheduler.run_batch sleep {self.forward_sleep_time}s")
             time.sleep(self.forward_sleep_time)
+        
+        torch.cuda.synchronize()
+        start_exe_time = time.perf_counter()
 
         # Run forward
         if self.is_generation:
@@ -1950,7 +1953,20 @@ class Scheduler(
             ret = EmbeddingBatchResult(
                 embeddings=embeddings, bid=model_worker_batch.bid
             )
-        return ret
+
+        torch.cuda.synchronize()
+        end_exe_time = time.perf_counter()
+        exe_time = end_exe_time - start_exe_time
+        for num, req in enumerate(batch.reqs):
+            if(batch.forward_mode == ForwardMode.EXTEND):
+                batch.reqs[num].prefill_time = batch.reqs[num].prefill_time + exe_time
+            elif(batch.forward_mode == ForwardMode.DECODE):
+                batch.reqs[num].decode_time = batch.reqs[num].decode_time + exe_time
+            elif(batch.forward_mode == ForwardMode.MIXED and req not in batch.decoding_reqs):
+                batch.reqs[num].prefill_time = batch.reqs[num].prefill_time + exe_time
+            elif(batch.forward_mode == ForwardMode.MIXED and req in batch.decoding_reqs):
+                batch.reqs[num].decode_time = batch.reqs[num].decode_time + exe_time
+        return ret, batch
 
     def process_batch_result(
         self,

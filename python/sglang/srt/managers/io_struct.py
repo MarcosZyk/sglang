@@ -692,6 +692,11 @@ class BatchTokenIDOut:
     # Hidden states
     output_hidden_states: List[List[float]]
 
+    prefill_times: Optional[List[float]] = None
+    decode_times: Optional[List[float]] = None
+    num_global_caches: Optional[List[int]] = None
+    num_local_caches: Optional[List[int]] = None
+
 
 @dataclass
 class BatchMultimodalDecodeReq:
@@ -738,6 +743,11 @@ class BatchStrOut:
 
     # Hidden states
     output_hidden_states: List[List[float]]
+
+    prefill_times: Optional[List[float]] = None
+    decode_times: Optional[List[float]] = None
+    num_global_caches: Optional[List[int]] = None
+    num_local_caches: Optional[List[int]] = None
 
 
 @dataclass

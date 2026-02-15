@@ -507,6 +507,10 @@ class Req:
         self.last_node: Any = None
         self.last_host_node: Any = None
         self.host_hit_length = 0
+
+        self.num_local_cache: int = 0
+        self.num_global_cache: int = 0
+
         # The node to lock until for swa radix tree lock ref
         self.swa_uuid_for_lock: Optional[int] = None
 
@@ -611,6 +615,9 @@ class Req:
         self.tmp_end_idx: int = -1
         self.metadata_buffer_index: int = -1
 
+        self.prefill_time = 0.0
+        self.decode_time = 0.0
+
     @property
     def seqlen(self):
         return len(self.origin_input_ids) + len(self.output_ids)
@@ -636,6 +643,8 @@ class Req:
                 self.last_node,
                 self.last_host_node,
                 self.host_hit_length,
+                self.num_local_cache,
+                self.num_global_cache
             ) = tree_cache.match_prefix(
                 key=self.adjust_max_prefix_ids(),
             )

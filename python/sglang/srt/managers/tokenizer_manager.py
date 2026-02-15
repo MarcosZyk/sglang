@@ -1391,6 +1391,10 @@ class TokenizerManager:
                 "id": rid,
                 "finish_reason": recv_obj.finished_reasons[i],
                 "prompt_tokens": recv_obj.prompt_tokens[i],
+                "prefill_time": recv_obj.prefill_times[i],
+                "decode_time": recv_obj.decode_times[i],
+                "num_local_cache": recv_obj.num_local_caches[i],
+                "num_global_cache": recv_obj.num_global_caches[i]
             }
 
             if getattr(state.obj, "return_logprob", False):

@@ -234,6 +234,10 @@ class DetokenizerManager:
             output_token_ids_logprobs_val=recv_obj.output_token_ids_logprobs_val,
             output_token_ids_logprobs_idx=recv_obj.output_token_ids_logprobs_idx,
             output_hidden_states=recv_obj.output_hidden_states,
+            prefill_times=recv_obj.prefill_times,
+            decode_times=recv_obj.decode_times,
+            num_local_caches=recv_obj.num_local_caches,
+            num_global_caches=recv_obj.num_global_caches
         )
 
     def handle_multimodal_decode_req(self, recv_obj: BatchMultimodalDecodeReq):

@@ -701,6 +701,10 @@ class OpenAIServingChat(OpenAIServingBase):
             model=request.model,
             choices=choices,
             usage=usage,
+            prefill_time=ret[0]["meta_info"]["prefill_time"],
+            decode_time=ret[0]["meta_info"]["decode_time"],
+            num_local_cache=ret[0]["meta_info"]["num_local_cache"],
+            num_global_cache=ret[0]["meta_info"]["num_global_cache"]
         )
 
     def _process_logprobs_tokens(

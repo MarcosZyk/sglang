@@ -120,6 +120,8 @@ class ArtesiaRadixCache(RadixCache):
         value: torch.Tensor = base_res.device_indices
         last_node: TreeNode = base_res.last_device_node
 
+        base_res.num_local_cache = value.numel()
+
         uncached_len = len(key) - value.numel()
         if uncached_len == 0:
             return base_res
@@ -139,6 +141,9 @@ class ArtesiaRadixCache(RadixCache):
             semantics=semantics,
             kv_indices=torch.cat([value, token_slots]),
         )
+
+        base_res.num_global_cache = num_retrieved
+
         delta = num_retrieved - value.numel()
         logger.info("Retrieved token num %s, valid %s", num_retrieved, delta)
         if delta > 0:

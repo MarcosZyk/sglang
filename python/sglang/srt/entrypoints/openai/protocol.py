@@ -230,6 +230,10 @@ class CompletionResponse(BaseModel):
     model: str
     choices: List[CompletionResponseChoice]
     usage: UsageInfo
+    prefill_time: float = 0.0
+    decode_time: float = 0.0
+    num_local_cache: int = 0
+    num_global_cache: int = 0
 
 
 class CompletionResponseStreamChoice(BaseModel):

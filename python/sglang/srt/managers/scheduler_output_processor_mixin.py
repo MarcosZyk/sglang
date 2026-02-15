@@ -494,6 +494,12 @@ class SchedulerOutputProcessorMixin:
         cached_tokens = []
         spec_verify_ct = []
         output_hidden_states = None
+        
+        prefill_times = []
+        decode_times = []
+
+        num_global_caches = []
+        num_local_caches = []
 
         if return_logprob:
             input_token_logprobs_val = []
@@ -582,6 +588,11 @@ class SchedulerOutputProcessorMixin:
                 prompt_tokens.append(len(req.origin_input_ids))
                 completion_tokens.append(len(req.output_ids))
                 cached_tokens.append(req.cached_tokens)
+
+                prefill_times.append(req.prefill_time)
+                decode_times.append(req.decode_time)
+                num_local_caches.append(req.num_local_cache)
+                num_global_caches.append(req.num_global_cache)
 
                 if not self.spec_algorithm.is_none():
                     spec_verify_ct.append(req.spec_verify_ct)
@@ -699,6 +710,10 @@ class SchedulerOutputProcessorMixin:
                     output_token_ids_logprobs_val,
                     output_token_ids_logprobs_idx,
                     output_hidden_states,
+                    prefill_times=prefill_times,
+                    decode_times=decode_times,
+                    num_local_caches=num_local_caches,
+                    num_global_caches=num_global_caches
                 )
             )
 
