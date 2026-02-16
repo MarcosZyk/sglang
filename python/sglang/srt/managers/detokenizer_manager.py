@@ -211,6 +211,7 @@ class DetokenizerManager:
             incremental_output = output_str[s.sent_offset :]
             s.sent_offset = len(output_str)
             output_strs.append(incremental_output)
+        logger.info(f"Send tokenizer: {recv_obj.prefill_times}, {recv_obj.decode_times}, {recv_obj.num_local_caches}, {recv_obj.num_global_caches}")
 
         return BatchStrOut(
             rids=recv_obj.rids,
