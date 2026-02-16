@@ -1378,7 +1378,7 @@ class TokenizerManager:
             BatchStrOut, BatchEmbeddingOut, BatchMultimodalOut, BatchTokenIDOut
         ],
     ):
-        logger.info(f"Recv tokenizer: {recv_obj.prefill_times}, {recv_obj.decode_times}, {recv_obj.num_local_caches}, {recv_obj.num_global_caches}")
+        #logger.info(f"Recv tokenizer: {recv_obj.prefill_times}, {recv_obj.decode_times}, {recv_obj.num_local_caches}, {recv_obj.num_global_caches}")
 
         for i, rid in enumerate(recv_obj.rids):
             state = self.rid_to_state.get(rid, None)

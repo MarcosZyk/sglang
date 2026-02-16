@@ -708,7 +708,7 @@ class SchedulerOutputProcessorMixin:
         if rids:
             if self.model_config.is_multimodal_gen:
                 return
-            logger.info(f"Detokenizer: {prefill_times}, {decode_times}, {num_local_caches}, {num_global_caches}")
+            #logger.info(f"Detokenizer: {prefill_times}, {decode_times}, {num_local_caches}, {num_global_caches}")
             self.send_to_detokenizer.send_pyobj(
                 BatchTokenIDOut(
                     rids,
