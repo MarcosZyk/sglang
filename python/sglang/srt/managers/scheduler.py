@@ -810,13 +810,17 @@ class Scheduler(
         """A normal scheduler loop."""
         while True:
             recv_reqs = self.recv_requests()
-            self.process_input_requests(recv_reqs)
-
-            batch = self.get_next_batch_to_run()
-            self.cur_batch = batch
 
             torch.cuda.synchronize()
             self.start_exe_time = time.perf_counter()
+
+            self.process_input_requests(recv_reqs)
+
+            torch.cuda.synchronize()
+            self.start_exe_time = time.perf_counter()
+
+            batch = self.get_next_batch_to_run()
+            self.cur_batch = batch
 
             if batch:
                 result = self.run_batch(batch)
@@ -837,6 +841,10 @@ class Scheduler(
 
         while True:
             recv_reqs = self.recv_requests()
+
+            torch.cuda.synchronize()
+            self.start_exe_time = time.perf_counter()
+
             self.process_input_requests(recv_reqs)
 
             batch = self.get_next_batch_to_run()
@@ -844,9 +852,6 @@ class Scheduler(
 
             if batch:
                 batch.launch_done = threading.Event()
-
-                torch.cuda.synchronize()
-                self.start_exe_time = time.perf_counter()
 
                 result = self.run_batch(batch)
                 self.result_queue.append((batch.copy(), result))
