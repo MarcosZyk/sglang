@@ -31,8 +31,8 @@ payload = {
     ],
     "task_list": [0, 0, 1, 0],
     "wait_time": [0, 0, 1, 0],
-    "tokenizer_name": "Qwen/Qwen2.5-1.5B-Instruct",
-    "openai_model": "Qwen/Qwen2.5-1.5B-Instruct",
+    "tokenizer_name": "Qwen/Qwen3-8B",
+    "openai_model": "Qwen/Qwen3-8B",
     "temperature": 0.0,
 }
 
