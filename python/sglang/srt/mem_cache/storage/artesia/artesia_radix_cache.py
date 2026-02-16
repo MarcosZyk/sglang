@@ -132,6 +132,7 @@ class ArtesiaRadixCache(RadixCache):
 
         uncached_len = len(key) - value.numel()
         if uncached_len == 0:
+            logger.info(f"uncached len is 0")
             return base_res
 
         if self.token_to_kv_pool_allocator.available_size() < uncached_len:
@@ -139,6 +140,7 @@ class ArtesiaRadixCache(RadixCache):
 
         token_slots = self.token_to_kv_pool_allocator.alloc(uncached_len)
         if token_slots is None:
+            logger.info(f"alloc token slots failed")
             return base_res
 
         logger.info(f"Try load {len(key)} tokens from Artesia")
