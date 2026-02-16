@@ -185,7 +185,14 @@ class ArtesiaRadixCache(RadixCache):
                 )
         else:
             self.token_to_kv_pool_allocator.free(token_slots)
-            return base_res
+            #return base_res
+            return MatchResult(
+                    device_indices=value,
+                    last_device_node=last_node,
+                    last_host_node=last_node,
+                    num_local_cache=num_local_cache,
+                    num_global_cache=num_global_cache
+                )
 
     def cache_finished_req(self, req: "Req") -> None:  # type: ignore[override]
         """On request completion, insert device KV into radix and store to LMCache."""
