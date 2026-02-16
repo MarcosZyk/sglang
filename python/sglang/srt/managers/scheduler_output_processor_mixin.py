@@ -9,6 +9,7 @@ from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 from sglang.srt.managers.io_struct import AbortReq, BatchEmbeddingOut, BatchTokenIDOut
 from sglang.srt.managers.schedule_batch import BaseFinishReason, Req, ScheduleBatch
+from sglang.srt.model_executor.forward_batch_info import ForwardMode, PPProxyTensors
 
 if TYPE_CHECKING:
     from sglang.srt.managers.scheduler import (
@@ -17,7 +18,7 @@ if TYPE_CHECKING:
         ScheduleBatch,
         Scheduler,
     )
-
+import torch
 logger = logging.getLogger(__name__)
 
 DEFAULT_FORCE_STREAM_INTERVAL = 50
@@ -68,6 +69,19 @@ class SchedulerOutputProcessorMixin:
                         )
 
             hidden_state_offset = 0
+
+            torch.cuda.synchronize()
+            self.end_exe_time = time.perf_counter()
+            exe_time = self.end_exe_time - self.start_exe_time
+            for num, req in enumerate(batch.reqs):
+                if(batch.forward_mode == ForwardMode.EXTEND):
+                    batch.reqs[num].prefill_time = batch.reqs[num].prefill_time + exe_time
+                elif(batch.forward_mode == ForwardMode.DECODE):
+                    batch.reqs[num].decode_time = batch.reqs[num].decode_time + exe_time
+                elif(batch.forward_mode == ForwardMode.MIXED and req not in batch.decoding_reqs):
+                    batch.reqs[num].prefill_time = batch.reqs[num].prefill_time + exe_time
+                elif(batch.forward_mode == ForwardMode.MIXED and req in batch.decoding_reqs):
+                    batch.reqs[num].decode_time = batch.reqs[num].decode_time + exe_time
 
             # Check finish conditions
             logprob_pt = 0
@@ -214,6 +228,19 @@ class SchedulerOutputProcessorMixin:
             next_token_ids = next_token_ids.tolist()
             if batch.return_logprob:
                 next_token_logprobs = logits_output.next_token_logprobs.tolist()
+
+        torch.cuda.synchronize()
+        self.end_exe_time = time.perf_counter()
+        exe_time = self.end_exe_time - self.start_exe_time
+        for num, req in enumerate(batch.reqs):
+            if(batch.forward_mode == ForwardMode.EXTEND):
+                batch.reqs[num].prefill_time = batch.reqs[num].prefill_time + exe_time
+            elif(batch.forward_mode == ForwardMode.DECODE):
+                batch.reqs[num].decode_time = batch.reqs[num].decode_time + exe_time
+            elif(batch.forward_mode == ForwardMode.MIXED and req not in batch.decoding_reqs):
+                batch.reqs[num].prefill_time = batch.reqs[num].prefill_time + exe_time
+            elif(batch.forward_mode == ForwardMode.MIXED and req in batch.decoding_reqs):
+                batch.reqs[num].decode_time = batch.reqs[num].decode_time + exe_time
 
         self.token_to_kv_pool_allocator.free_group_begin()
 
