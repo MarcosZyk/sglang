@@ -694,7 +694,7 @@ class OpenAIServingChat(OpenAIServingBase):
             n_choices=request.n,
             enable_cache_report=self.tokenizer_manager.server_args.enable_cache_report,
         )
-
+        logger.info(f"return req: {ret}")
         return ChatCompletionResponse(
             id=ret[0]["meta_info"]["id"],
             created=created,
