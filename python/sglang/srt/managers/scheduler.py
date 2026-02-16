@@ -819,7 +819,7 @@ class Scheduler(
             self.start_exe_time = time.perf_counter()
 
             if batch:
-                result, batch = self.run_batch(batch)
+                result = self.run_batch(batch)
                 self.process_batch_result(batch, result)
             else:
                 # When the server is idle, do self-check and re-init some states
@@ -848,7 +848,7 @@ class Scheduler(
                 torch.cuda.synchronize()
                 self.start_exe_time = time.perf_counter()
 
-                result, batch = self.run_batch(batch)
+                result = self.run_batch(batch)
                 self.result_queue.append((batch.copy(), result))
 
                 if self.last_batch is None:
@@ -905,7 +905,7 @@ class Scheduler(
                 self.start_exe_time = time.perf_counter()
                 if self.cur_batch:
                     server_is_idle = False
-                    result, self.cur_batch = self.run_batch(self.cur_batch)
+                    result = self.run_batch(self.cur_batch)
 
                 # (last rank) send the outputs to the next step
                 if self.pp_group.is_last_rank:
