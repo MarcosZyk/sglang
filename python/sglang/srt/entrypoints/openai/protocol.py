@@ -502,6 +502,10 @@ class ChatCompletionResponse(BaseModel):
     model: str
     choices: List[ChatCompletionResponseChoice]
     usage: UsageInfo
+    prefill_time: float
+    decode_time: float
+    num_local_cache: int
+    num_global_cache: int
 
 
 class DeltaMessage(BaseModel):
