@@ -120,7 +120,15 @@ class ArtesiaRadixCache(RadixCache):
         value: torch.Tensor = base_res.device_indices
         last_node: TreeNode = base_res.last_device_node
 
-        base_res.num_local_cache = value.numel()
+        num_local_cache = value.numel()
+
+        base_res = MatchResult(
+            device_indices=value,
+            last_device_node=last_node,
+            last_host_node=last_node,
+            num_local_cache=num_local_cache,
+            num_global_cache=0
+        )
 
         uncached_len = len(key) - value.numel()
         if uncached_len == 0:
@@ -142,7 +150,7 @@ class ArtesiaRadixCache(RadixCache):
             kv_indices=torch.cat([value, token_slots]),
         )
 
-        base_res.num_global_cache = num_retrieved
+        num_global_cache = num_retrieved
 
         delta = num_retrieved - value.numel()
         logger.info("Retrieved token num %s, valid %s", num_retrieved, delta)
@@ -172,6 +180,8 @@ class ArtesiaRadixCache(RadixCache):
                     device_indices=value,
                     last_device_node=last_node,
                     last_host_node=last_node,
+                    num_local_cache=num_local_cache,
+                    num_global_cache=num_global_cache
                 )
         else:
             self.token_to_kv_pool_allocator.free(token_slots)
