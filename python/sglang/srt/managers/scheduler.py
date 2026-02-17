@@ -812,12 +812,9 @@ class Scheduler(
             recv_reqs = self.recv_requests()
 
             torch.cuda.synchronize()
-            self.start_exe_time = time.perf_counter()
+            self.start_exe_time: float = time.perf_counter()
 
             self.process_input_requests(recv_reqs)
-
-            torch.cuda.synchronize()
-            self.start_exe_time = time.perf_counter()
 
             batch = self.get_next_batch_to_run()
             self.cur_batch = batch
@@ -849,6 +846,9 @@ class Scheduler(
 
             batch = self.get_next_batch_to_run()
             self.cur_batch = batch
+
+            for num, _ in enumerate(batch.reqs):
+                batch.reqs[num].push_to_model_runner_time = self.start_exe_time
 
             if batch:
                 batch.launch_done = threading.Event()

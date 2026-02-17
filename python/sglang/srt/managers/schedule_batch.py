@@ -618,6 +618,8 @@ class Req:
         self.prefill_time = 0.0
         self.decode_time = 0.0
 
+        self.push_to_model_runner_time = 0.0
+
     @property
     def seqlen(self):
         return len(self.origin_input_ids) + len(self.output_ids)
