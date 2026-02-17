@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 from typing import TYPE_CHECKING, List, Optional
-
+import time
 import torch
 
 from sglang.srt.mem_cache.allocator import BaseTokenToKVPoolAllocator
@@ -144,6 +144,9 @@ class ArtesiaRadixCache(RadixCache):
             return base_res
 
         logger.info(f"Try load {len(key)} tokens from Artesia")
+        torch.cuda.synchronize()
+        start_retrieve = time.perf_counter()
+
         context = ContextDescription(token_ids=key, offset=value.numel())
         semantics = SemanticDescription(tag_list=[])
         num_retrieved = self.artesia_connector.load_kv(
@@ -151,6 +154,12 @@ class ArtesiaRadixCache(RadixCache):
             semantics=semantics,
             kv_indices=torch.cat([value, token_slots]),
         )
+
+        torch.cuda.synchronize()
+        end_retrieve = time.perf_counter()
+
+        logger.info(f"Retrieve Time: {end_retrieve - start_retrieve}s")
+
 
         num_global_cache = num_retrieved
 
@@ -205,6 +214,8 @@ class ArtesiaRadixCache(RadixCache):
         ]
 
         logger.info(f"Start offload {len(token_ids)} tokens to Artesia")
+        torch.cuda.synchronize()
+        start_store = time.perf_counter()
         context = ContextDescription(token_ids=token_ids, offset=0)
         semantics = SemanticDescription(tag_list=[])
         self.artesia_connector.offload_kv(
@@ -212,6 +223,10 @@ class ArtesiaRadixCache(RadixCache):
             semantics=semantics,
             kv_indices=kv_indices,
         )
+        torch.cuda.synchronize()
+        end_store = time.perf_counter()
+
+        logger.info(f'Offload time is {end_store - start_store}')
 
         super().cache_finished_req(req)
 
