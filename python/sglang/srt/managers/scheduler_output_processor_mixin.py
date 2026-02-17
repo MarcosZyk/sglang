@@ -73,7 +73,6 @@ class SchedulerOutputProcessorMixin:
             torch.cuda.synchronize()
             self.end_exe_time = time.perf_counter()
             for num, req in enumerate(batch.reqs):
-                logger.info(f"inference step time: {self.end_exe_time - batch.reqs[num].push_to_model_runner_time}")
                 if(batch.forward_mode == ForwardMode.EXTEND):
                     batch.reqs[num].prefill_time = batch.reqs[num].prefill_time + self.end_exe_time - batch.reqs[num].push_to_model_runner_time
                 elif(batch.forward_mode == ForwardMode.DECODE):
@@ -232,7 +231,6 @@ class SchedulerOutputProcessorMixin:
         torch.cuda.synchronize()
         self.end_exe_time = time.perf_counter()
         for num, req in enumerate(batch.reqs):
-            logger.info(f"inference step time: {self.end_exe_time - batch.reqs[num].push_to_model_runner_time}")
             if(batch.forward_mode == ForwardMode.EXTEND):
                 batch.reqs[num].prefill_time = batch.reqs[num].prefill_time + self.end_exe_time - batch.reqs[num].push_to_model_runner_time
             elif(batch.forward_mode == ForwardMode.DECODE):
