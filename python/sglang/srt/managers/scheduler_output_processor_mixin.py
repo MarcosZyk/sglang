@@ -73,16 +73,15 @@ class SchedulerOutputProcessorMixin:
             torch.cuda.synchronize()
             self.end_exe_time = time.perf_counter()
             for num, req in enumerate(batch.reqs):
+                start_exe_time = req.push_to_model_runner_time.popleft()
                 if(batch.forward_mode == ForwardMode.EXTEND):
-                    logger.info(f"inference step time: {self.end_exe_time - batch.reqs[num].push_to_model_runner_time}")
-                    batch.reqs[num].prefill_time = batch.reqs[num].prefill_time + self.end_exe_time - batch.reqs[num].push_to_model_runner_time
+                    batch.reqs[num].prefill_time = batch.reqs[num].prefill_time + self.end_exe_time - start_exe_time
                 elif(batch.forward_mode == ForwardMode.DECODE):
-                    batch.reqs[num].decode_time = batch.reqs[num].decode_time + self.end_exe_time - batch.reqs[num].push_to_model_runner_time
+                    batch.reqs[num].decode_time = batch.reqs[num].decode_time + self.end_exe_time - start_exe_time
                 elif(batch.forward_mode == ForwardMode.MIXED and req not in batch.decoding_reqs):
-                    logger.info(f"inference step time: {self.end_exe_time - batch.reqs[num].push_to_model_runner_time}")
-                    batch.reqs[num].prefill_time = batch.reqs[num].prefill_time + self.end_exe_time - batch.reqs[num].push_to_model_runner_time
+                    batch.reqs[num].prefill_time = batch.reqs[num].prefill_time + self.end_exe_time - start_exe_time
                 elif(batch.forward_mode == ForwardMode.MIXED and req in batch.decoding_reqs):
-                    batch.reqs[num].decode_time = batch.reqs[num].decode_time + self.end_exe_time - batch.reqs[num].push_to_model_runner_time
+                    batch.reqs[num].decode_time = batch.reqs[num].decode_time + self.end_exe_time - start_exe_time
 
             # Check finish conditions
             logprob_pt = 0
@@ -233,14 +232,15 @@ class SchedulerOutputProcessorMixin:
         torch.cuda.synchronize()
         self.end_exe_time = time.perf_counter()
         for num, req in enumerate(batch.reqs):
+            start_exe_time = req.push_to_model_runner_time.popleft()
             if(batch.forward_mode == ForwardMode.EXTEND):
-                batch.reqs[num].prefill_time = batch.reqs[num].prefill_time + self.end_exe_time - batch.reqs[num].push_to_model_runner_time
+                batch.reqs[num].prefill_time = batch.reqs[num].prefill_time + self.end_exe_time - start_exe_time
             elif(batch.forward_mode == ForwardMode.DECODE):
-                batch.reqs[num].decode_time = batch.reqs[num].decode_time + self.end_exe_time - batch.reqs[num].push_to_model_runner_time
+                batch.reqs[num].decode_time = batch.reqs[num].decode_time + self.end_exe_time - start_exe_time
             elif(batch.forward_mode == ForwardMode.MIXED and req not in batch.decoding_reqs):
-                batch.reqs[num].prefill_time = batch.reqs[num].prefill_time + self.end_exe_time - batch.reqs[num].push_to_model_runner_time
+                batch.reqs[num].prefill_time = batch.reqs[num].prefill_time + self.end_exe_time - start_exe_time
             elif(batch.forward_mode == ForwardMode.MIXED and req in batch.decoding_reqs):
-                batch.reqs[num].decode_time = batch.reqs[num].decode_time + self.end_exe_time - batch.reqs[num].push_to_model_runner_time
+                batch.reqs[num].decode_time = batch.reqs[num].decode_time + self.end_exe_time - start_exe_time
 
         self.token_to_kv_pool_allocator.free_group_begin()
 

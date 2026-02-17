@@ -71,6 +71,9 @@ if TYPE_CHECKING:
     from sglang.srt.speculative.eagle_utils import EagleDraftInput, EagleVerifyInput
     from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 
+from collections import deque
+from typing import Deque
+
 INIT_INCREMENTAL_DETOKENIZATION_OFFSET = 5
 
 GLOBAL_SERVER_ARGS_KEYS = [
@@ -618,7 +621,7 @@ class Req:
         self.prefill_time = 0.0
         self.decode_time = 0.0
 
-        self.push_to_model_runner_time = 0.0
+        self.push_to_model_runner_time: Optional[Deque[float]] = deque()
 
     @property
     def seqlen(self):
