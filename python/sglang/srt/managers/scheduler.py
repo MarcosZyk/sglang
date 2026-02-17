@@ -1285,6 +1285,7 @@ class Scheduler(
             self.disagg_decode_prealloc_queue.add(req)
         else:
             if self.enable_hicache_storage:
+                logger.info(f'enabling hicache to start load context')
                 req.init_next_round_input(self.tree_cache)
                 last_hash = req.last_host_node.get_last_hash_value()
                 matched_len = len(req.prefix_indices) + req.host_hit_length
