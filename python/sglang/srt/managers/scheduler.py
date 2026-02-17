@@ -819,10 +819,9 @@ class Scheduler(
             batch = self.get_next_batch_to_run()
             self.cur_batch = batch
 
-            for num, _ in enumerate(batch.reqs):
-                batch.reqs[num].push_to_model_runner_time = self.start_exe_time
-
             if batch:
+                for num, _ in enumerate(batch.reqs):
+                    batch.reqs[num].push_to_model_runner_time = self.start_exe_time
                 result = self.run_batch(batch)
                 self.process_batch_result(batch, result)
             else:
@@ -850,10 +849,9 @@ class Scheduler(
             batch = self.get_next_batch_to_run()
             self.cur_batch = batch
 
-            for num, _ in enumerate(batch.reqs):
-                batch.reqs[num].push_to_model_runner_time = self.start_exe_time
-
             if batch:
+                for num, _ in enumerate(batch.reqs):
+                    batch.reqs[num].push_to_model_runner_time = self.start_exe_time
                 batch.launch_done = threading.Event()
 
                 result = self.run_batch(batch)
