@@ -2,6 +2,8 @@
 import requests
 import json
 
+from generate_payload import read_replay_data
+
 URL = "http://127.0.0.1:12306/simulate"
 
 payload = {
@@ -36,7 +38,9 @@ payload = {
     "temperature": 0.0,
 }
 
-resp = requests.post(URL, json=payload)
+payload1 = read_replay_data("../dataset/replay_data_3.json")
+
+resp = requests.post(URL, json=payload1)
 print(resp.status_code)
 print(resp.json())
 # 若运行后返回 session_id, 可去 sessions/<id>.json 查看完整保存记录
