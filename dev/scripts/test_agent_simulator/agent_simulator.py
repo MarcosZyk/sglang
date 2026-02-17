@@ -118,7 +118,7 @@ def simulate(req: SimRequest):
         m = m_list[i]
 
         task_type = req.task_list[i]
-
+        client_type = 1 if task_type !=0 else 0
         # a_row: token 长度每条 message（由客户端提供或默认生成）
         a_row = a_list[i]
         if len(a_row) != m:
@@ -188,7 +188,7 @@ def simulate(req: SimRequest):
                 call_messages.append({"role": role, "content": content})
 
         try:
-            completion = client_list[task_type].chat.completions.create(
+            completion = client_list[client_type].chat.completions.create(
                 model=openai_model,
                 messages=call_messages,
                 max_tokens=s_list[i],
