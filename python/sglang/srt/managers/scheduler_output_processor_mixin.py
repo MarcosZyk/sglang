@@ -74,10 +74,12 @@ class SchedulerOutputProcessorMixin:
             self.end_exe_time = time.perf_counter()
             for num, req in enumerate(batch.reqs):
                 if(batch.forward_mode == ForwardMode.EXTEND):
+                    logger.info(f"inference step time: {self.end_exe_time - batch.reqs[num].push_to_model_runner_time}")
                     batch.reqs[num].prefill_time = batch.reqs[num].prefill_time + self.end_exe_time - batch.reqs[num].push_to_model_runner_time
                 elif(batch.forward_mode == ForwardMode.DECODE):
                     batch.reqs[num].decode_time = batch.reqs[num].decode_time + self.end_exe_time - batch.reqs[num].push_to_model_runner_time
                 elif(batch.forward_mode == ForwardMode.MIXED and req not in batch.decoding_reqs):
+                    logger.info(f"inference step time: {self.end_exe_time - batch.reqs[num].push_to_model_runner_time}")
                     batch.reqs[num].prefill_time = batch.reqs[num].prefill_time + self.end_exe_time - batch.reqs[num].push_to_model_runner_time
                 elif(batch.forward_mode == ForwardMode.MIXED and req in batch.decoding_reqs):
                     batch.reqs[num].decode_time = batch.reqs[num].decode_time + self.end_exe_time - batch.reqs[num].push_to_model_runner_time
