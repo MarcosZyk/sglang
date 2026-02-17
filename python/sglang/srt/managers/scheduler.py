@@ -815,8 +815,15 @@ class Scheduler(
             self.start_exe_time: float = time.perf_counter()
 
             self.process_input_requests(recv_reqs)
-
+            start_schedule = time.perf_counter()
             batch = self.get_next_batch_to_run()
+            end_schedule = time.perf_counter()
+
+            if batch:
+                logger.info(f'Batch is True and schedule time: {end_schedule - start_schedule}')
+            elif (end_schedule - start_schedule) > 3 and not batch:
+                logger.info(f'Batch is False and schedule time: {end_schedule - start_schedule}') 
+
             self.cur_batch = batch
 
             if batch:
@@ -846,8 +853,15 @@ class Scheduler(
 
             self.process_input_requests(recv_reqs)
 
+            start_schedule = time.perf_counter()
             batch = self.get_next_batch_to_run()
+            end_schedule = time.perf_counter()
             self.cur_batch = batch
+
+            if batch:
+                logger.info(f'Batch is True and schedule time: {end_schedule - start_schedule}')
+            elif (end_schedule - start_schedule) > 3 and not batch:
+                logger.info(f'Batch is False and schedule time: {end_schedule - start_schedule}') 
 
             if batch:
                 for num, _ in enumerate(batch.reqs):
