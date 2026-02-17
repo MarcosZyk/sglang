@@ -226,7 +226,7 @@ class ArtesiaRadixCache(RadixCache):
         torch.cuda.synchronize()
         end_store = time.perf_counter()
 
-        logger.info(f'Offload time is {end_store - start_store}')
+        logger.info(f'Offload time is {end_store - start_store}s')
 
         super().cache_finished_req(req)
 
