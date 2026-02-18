@@ -143,7 +143,7 @@ class ArtesiaRadixCache(RadixCache):
             #logger.info(f"alloc token slots failed")
             return base_res
 
-        logger.info(f"Try load {len(key)} tokens from Artesia")
+        logger.info(f"Try load {len(key)} tokens from Artesia with offset={value.numel()}")
         torch.cuda.synchronize()
         start_retrieve = time.perf_counter()
 
@@ -163,10 +163,8 @@ class ArtesiaRadixCache(RadixCache):
 
         num_global_cache = num_retrieved
 
-        delta = num_retrieved - value.numel()
-        logger.info("Retrieved token num %s, valid %s", num_retrieved, delta)
-        if delta > 0:
-            logger.debug("num_retrieved_tokens: %s", delta)
+        logger.info("Retrieved token num %s from Artesia", num_retrieved)
+        if num_retrieved > 0:
             prefix_pad = num_retrieved % self.page_size
             self.token_to_kv_pool_allocator.free(
                 token_slots[(num_retrieved - prefix_pad) :]
