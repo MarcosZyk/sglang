@@ -146,7 +146,7 @@ def simulate(req: SimRequest):
         for j in range(m):
             a_ij = int(a_row[j])
             b_ij = int(b_row[j])
-            role_j = roles_row[j]
+            role_j = roles_row[j] if roles_row else "user"
 
             reused_ids = []
             if i > 0 and prev_msg_token_ids_per_round[task_type]:
@@ -227,7 +227,7 @@ def simulate(req: SimRequest):
         prev_msg_token_ids_per_round[task_type].append(this_round_prompt_token_ids)
 
         time.sleep(req.wait_time[i])
-    
+
     end_time = time.perf_counter()
     print(end_time - start_time)
 

@@ -38,7 +38,7 @@ payload = {
     "temperature": 0.0,
 }
 
-payload1 = read_replay_data("../dataset/replay_data_3.json")
+payload1 = read_replay_data("./replay_data_3.json")
 
 resp = requests.post(URL, json=payload1)
 print(resp.status_code)
