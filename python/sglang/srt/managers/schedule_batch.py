@@ -618,8 +618,8 @@ class Req:
         self.tmp_end_idx: int = -1
         self.metadata_buffer_index: int = -1
 
-        self.prefill_time = 0.0
-        self.decode_time = 0.0
+        self.prefill_time: float = 0.0
+        self.decode_time: List[float] = []
 
         self.push_to_model_runner_time: Optional[Deque[float]] = deque()
 

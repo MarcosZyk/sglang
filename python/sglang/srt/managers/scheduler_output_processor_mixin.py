@@ -78,11 +78,11 @@ class SchedulerOutputProcessorMixin:
                 if(batch.forward_mode == ForwardMode.EXTEND):
                     batch.reqs[num].prefill_time = batch.reqs[num].prefill_time + self.end_exe_time - start_exe_time
                 elif(batch.forward_mode == ForwardMode.DECODE):
-                    batch.reqs[num].decode_time = batch.reqs[num].decode_time + self.end_exe_time - start_exe_time
+                    batch.reqs[num].decode_time = batch.reqs[num].decode_time.append(self.end_exe_time - start_exe_time)
                 elif(batch.forward_mode == ForwardMode.MIXED and req not in batch.decoding_reqs):
                     batch.reqs[num].prefill_time = batch.reqs[num].prefill_time + self.end_exe_time - start_exe_time
                 elif(batch.forward_mode == ForwardMode.MIXED and req in batch.decoding_reqs):
-                    batch.reqs[num].decode_time = batch.reqs[num].decode_time + self.end_exe_time - start_exe_time
+                    batch.reqs[num].decode_time = batch.reqs[num].decode_time.append(self.end_exe_time - start_exe_time)
 
             # Check finish conditions
             logprob_pt = 0
@@ -238,11 +238,11 @@ class SchedulerOutputProcessorMixin:
             if(batch.forward_mode == ForwardMode.EXTEND):
                 batch.reqs[num].prefill_time = batch.reqs[num].prefill_time + self.end_exe_time - start_exe_time
             elif(batch.forward_mode == ForwardMode.DECODE):
-                batch.reqs[num].decode_time = batch.reqs[num].decode_time + self.end_exe_time - start_exe_time
+                batch.reqs[num].decode_time = batch.reqs[num].decode_time.append(self.end_exe_time - start_exe_time)
             elif(batch.forward_mode == ForwardMode.MIXED and req not in batch.decoding_reqs):
                 batch.reqs[num].prefill_time = batch.reqs[num].prefill_time + self.end_exe_time - start_exe_time
             elif(batch.forward_mode == ForwardMode.MIXED and req in batch.decoding_reqs):
-                batch.reqs[num].decode_time = batch.reqs[num].decode_time + self.end_exe_time - start_exe_time
+                batch.reqs[num].decode_time = batch.reqs[num].decode_time.append(self.end_exe_time - start_exe_time)
 
         self.token_to_kv_pool_allocator.free_group_begin()
 

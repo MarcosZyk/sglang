@@ -503,7 +503,7 @@ class ChatCompletionResponse(BaseModel):
     choices: List[ChatCompletionResponseChoice]
     usage: UsageInfo
     prefill_time: float
-    decode_time: float
+    decode_time: List[float]
     num_local_cache: int
     num_global_cache: int
 
