@@ -143,7 +143,7 @@ class LoadTestStats:
 class TokenBucket:
     """令牌桶 - 精确控制请求速率"""
     
-    def __init__(self, rate: float, capacity: Optional[int] = None):
+    def __init__(self, rate: float, capacity: Optional[int] = 32):
         self.rate = rate
         self.capacity = capacity if capacity else int(rate)
         self.tokens = float(self.capacity)
@@ -165,6 +165,7 @@ class TokenBucket:
                 self.last_update += wait_needed
                 self.tokens = 0
                 wait_time = wait_needed
+                logger.info(f"tokens is {self.tokens}, wait time is {wait_time}")
         
         if wait_time > 0:
             time.sleep(wait_time)
