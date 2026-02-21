@@ -16,6 +16,7 @@ import uvicorn
 import argparse
 import uuid
 import csv
+import numpy as np
 
 # 配置日志
 #logging.basicConfig(level=logging.info)
@@ -281,7 +282,13 @@ def simulate_sync(req_dict: Dict) -> Dict:
             else 0
         )
 
-        write_result = [task_type, completion.usage.prompt_tokens, completion.usage.completion_tokens, cached_tokens, completion.prefill_time, completion.decode_time, completion.num_local_cache, completion.num_global_cache]
+        decode_time = completion.decode_time
+        sum_decode_time = np.sum(decode_time)
+        avg_decode_time = np.average(decode_time)
+        p50_decode_time = np.percentile(decode_time, 50)
+        p95_decode_time = np.percentile(decode_time, 95)
+
+        write_result = [task_type, completion.usage.prompt_tokens, completion.usage.completion_tokens, cached_tokens, completion.prefill_time, sum_decode_time, avg_decode_time, p50_decode_time, p95_decode_time, completion.num_local_cache, completion.num_global_cache]
         csv_writer.writerow(write_result)
 
         # 等待指定时间（模拟 tool 调用延迟）
