@@ -297,6 +297,7 @@ async def process_request(req: SimRequest):
     """
     # 将请求放到线程池中执行
     loop = asyncio.get_event_loop()
+    print(req)
     #print(f"Recv Req at: {time.time()}", flush=True)
     
     try:
