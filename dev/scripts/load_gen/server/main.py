@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 class ServerConfig:
     """服务端配置"""
-    def __init__(self, host: str = "0.0.0.0", port: int = 8000,
+    def __init__(self, host: str = "0.0.0.0", port: int = 12306,
                  max_concurrent: int = 32, work_delay: float = 0.001):  # 默认更小的延迟
         self.host = host
         self.port = port
@@ -207,7 +207,7 @@ async def root():
     })
 
 
-def run_server(host: str = "0.0.0.0", port: int = 8000, 
+def run_server(host: str = "0.0.0.0", port: int = 12306, 
                max_concurrent: int = 32, work_delay: float = 0.001,
                http_threads: int = 4):  # 新增 HTTP 线程数参数
     """启动服务器"""
