@@ -85,26 +85,16 @@ def sync_business_logic(sim_request: SimRequest, request_id: str) -> Dict[str, A
     3. 最小化 sleep 时间
     """
     process_start = time.perf_counter()
+    print(process_start)
     
     # 快速计算 token 数（不验证完整列表）
     total_tokens = 0
     total_messages = sim_request.n  # 默认值
     
-    if sim_request.s_list and isinstance(sim_request.s_list, list):
-        try:
-            total_tokens = sum(sim_request.s_list)
-        except (TypeError, ValueError):
-            total_tokens = 0
-    
-    if sim_request.m_list and isinstance(sim_request.m_list, list):
-        try:
-            total_messages = sum(sim_request.m_list)
-        except (TypeError, ValueError):
-            total_messages = sim_request.n
-    
     # 最小化处理延迟
-    if server_config.work_delay > 0:
-        time.sleep(server_config.work_delay)
+    simulate(sim_request)
+    #if server_config.work_delay > 0:
+    #    time.sleep(server_config.work_delay)
     
     process_time = time.perf_counter() - process_start
     
@@ -113,12 +103,7 @@ def sync_business_logic(sim_request: SimRequest, request_id: str) -> Dict[str, A
         "status": "processed",
         "process_time_ms": process_time * 1000,
         "total_tokens": total_tokens,
-        "total_messages": total_messages,
-        "n": sim_request.n,
-        "n_task": sim_request.n_task,
-        "model_name": sim_request.openai_model,
-        "tokenizer_name": sim_request.tokenizer_name,
-        "temperature": sim_request.temperature
+        "total_messages": total_messages,      
     }
 
 
