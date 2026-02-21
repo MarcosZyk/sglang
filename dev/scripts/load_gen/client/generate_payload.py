@@ -2,7 +2,7 @@ import json
 import argparse
 from typing import Optional
 
-def read_replay_data(file_path: Optional[str] = None):
+def read_replay_data(file_path: Optional[str] = None, model_name: str = None):
     """
     读取 replay_data_3.json 文件并将其转换为指定格式的字典
     
@@ -29,15 +29,10 @@ def read_replay_data(file_path: Optional[str] = None):
             ],
             "task_list": [0, 0, 1, 0],
             "wait_time": [0, 0, 1, 0],
-            "tokenizer_name": "Qwen/Qwen2.5-1.5B-Instruct",
-            "openai_model": "Qwen/Qwen2.5-1.5B-Instruct",
+            "tokenizer_name": model_name,
+            "openai_model": model_name,
             "temperature": 0.0,
         }
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--model', default='Qwen/Qwen2.5-1.5B-Instruct', type=str)
-    args = parser.parse_args()
-    model_name = args.model_name
 
     # 读取JSON文件
     with open(file_path, 'r', encoding='utf-8') as f:

@@ -382,9 +382,9 @@ class LoadGenerator:
 
 
 def run_client(server_url: str = "http://localhost:12306",
-               rps: float = 100.0, total_requests: int = 1000):
+               rps: float = 100.0, total_requests: int = 1000, model_name: str = None):
     """运行客户端负载测试"""
-    sim_config = read_replay_data('../../../dataset/replay_data_4.json')
+    sim_config = read_replay_data('../../../dataset/replay_data_4.json', model_name)
     generator = LoadGenerator(
         server_url=server_url,
         rps=rps,
@@ -404,10 +404,11 @@ if __name__ == "__main__":
     parser.add_argument("--requests", type=int, default=1000, help="Total requests")
     parser.add_argument("--sim-n", type=int, default=10, help="SimRequest n value")
     parser.add_argument("--sim-n-task", type=int, default=3, help="SimRequest n_task value")
-    
+    parser.add_argument('--model', default='Qwen/Qwen3-8B', type=str)
     args = parser.parse_args()
     run_client(
         server_url=args.url,
         rps=args.rps,
         total_requests=args.requests,
+        args.model,
     )
