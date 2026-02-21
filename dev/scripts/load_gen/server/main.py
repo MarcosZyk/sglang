@@ -100,6 +100,7 @@ async def process_request(sim_request: SimRequest):
     #    raise HTTPException(status_code=400, detail=str(e))
     
     # 获取执行许可（可能排队等待）
+    logger.info(f'Recv Req at {time.time()}')
     wait_time = await global_limiter.acquire(request_id)
     
     process_start = time.perf_counter()
