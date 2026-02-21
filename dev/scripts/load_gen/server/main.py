@@ -192,7 +192,7 @@ def simulate_sync(req_dict: Dict) -> Dict:
         
         round_messages = []
         this_round_prompt_token_ids: List[List[int]] = []
-        
+        client_type = 0 if task_type == 0 else 1
         # 构建 m 条 message（保持顺序）
         for j in range(m):
             a_ij = int(a_row[j])
@@ -239,7 +239,7 @@ def simulate_sync(req_dict: Dict) -> Dict:
         
         # ========== LLM 调用（同步，但在线程池中执行） ==========
         try:
-            completion = client_list[task_type].chat.completions.create(
+            completion = client_list[client_type].chat.completions.create(
                 model=openai_model,
                 messages=call_messages,
                 max_tokens=s_list[i],
