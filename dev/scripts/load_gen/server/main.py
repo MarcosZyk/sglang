@@ -21,7 +21,6 @@ except ImportError:
     print("Warning: orjson not installed, using standard json. Install with: pip install orjson")
 
 from .limiter import ConcurrentLimiter
-from .models import SimRequest, SimResponse, ServerStats
 
 # 配置日志 - 降低级别减少开销
 logging.basicConfig(
