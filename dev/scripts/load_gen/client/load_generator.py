@@ -15,7 +15,7 @@ from urllib3.util.retry import Retry
 
 from .generate_payload import read_replay_data
 from pydantic import BaseModel
-
+import argparse
 import time
 
 logging.basicConfig(level=logging.INFO)
@@ -397,7 +397,6 @@ def run_client(server_url: str = "http://localhost:12306",
 
 
 if __name__ == "__main__":
-    import argparse
     
     parser = argparse.ArgumentParser(description="Load Generator Client with SimRequest")
     parser.add_argument("--url", default="http://localhost:12306", help="Server URL")
