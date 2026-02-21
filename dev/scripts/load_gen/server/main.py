@@ -94,10 +94,10 @@ async def process_request(sim_request: SimRequest):
     request_id = str(uuid.uuid4())[:8]
     
     # 验证请求数据
-    try:
-        sim_request.validate_lists()
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    #try:
+    #    sim_request.validate_lists()
+    #except ValueError as e:
+    #    raise HTTPException(status_code=400, detail=str(e))
     
     # 获取执行许可（可能排队等待）
     wait_time = await global_limiter.acquire(request_id)
