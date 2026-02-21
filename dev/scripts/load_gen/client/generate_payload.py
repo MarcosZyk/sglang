@@ -46,7 +46,7 @@ def read_replay_data(file_path: Optional[str] = None, model_name: str = None):
         "m_list": [],
         "a_list": [],
         "b_list": [],
-        "role_list": [],
+        "roles_list": [],
         "wait_time": [],
         "tempurature": 0,
         "openai_model": model_name,
