@@ -116,6 +116,8 @@ def simulate_sync(req_dict: Dict) -> Dict:
     不同请求可以并行执行，但每个请求内部保持顺序
     """
     start_time = time.perf_counter()
+
+    logger.info(f"Recv Req at: {time.time()} ")
     
     # 从字典重建 SimRequest 对象
     req = SimRequest(**req_dict)
