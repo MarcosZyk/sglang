@@ -208,7 +208,7 @@ def run_server(host: str = "0.0.0.0", port: int = 12306,
         "server.main:app",
         host=host,
         port=port,
-        workers=1,  # 保持单 worker 保证并发控制准确
+        workers=8,  # 保持单 worker 保证并发控制准确
         http="httptools",
         #http_threads=http_threads,  # 增加 HTTP 处理线程
         loop="asyncio",
