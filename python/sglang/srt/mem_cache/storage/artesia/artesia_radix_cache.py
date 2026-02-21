@@ -225,7 +225,6 @@ class ArtesiaRadixCache(RadixCache):
         end_store = time.perf_counter()
 
         logger.info(f'Offload time is {end_store - start_store}s')
-        req.decode_time = req.decode_time + end_store - start_store
         super().cache_finished_req(req)
 
     def pretty_print(self):  # type: ignore[override]
