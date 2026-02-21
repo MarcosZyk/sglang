@@ -410,5 +410,5 @@ if __name__ == "__main__":
         server_url=args.url,
         rps=args.rps,
         total_requests=args.requests,
-        args.model,
+        model_name=args.model,
     )
