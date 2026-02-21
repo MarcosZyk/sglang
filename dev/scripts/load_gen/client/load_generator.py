@@ -176,7 +176,7 @@ class LoadGenerator:
     
     def __init__(self, server_url: str = "http://localhost:12306",
                  rps: float = 100.0, total_requests: int = 1000,
-                 timeout: float = 1800.0, warmup_requests: int = 10,
+                 timeout: float = 1800.0, warmup_requests: int = 0,
                  sim_config: Optional[SimRequest] = None):
         self.server_url = server_url
         self.rps = rps
@@ -266,7 +266,7 @@ class LoadGenerator:
     
     def _worker(self, request_id: int):
         """工作线程"""
-        self.token_bucket.acquire()
+        #self.token_bucket.acquire()
         result = self._send_request(request_id)
         
         with self._results_lock:
@@ -320,12 +320,14 @@ class LoadGenerator:
                 if self._stop_flag.is_set():
                     break
                 futures.append(executor.submit(self._worker, i))
+                time.sleep(1/self.rps)
             
             for future in as_completed(futures):
                 try:
                     future.result()
                 except Exception as e:
                     logger.error(f"Worker error: {e}")
+
         
         self.stats.calculate_metrics()
         

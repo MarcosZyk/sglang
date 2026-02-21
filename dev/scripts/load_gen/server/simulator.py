@@ -199,7 +199,7 @@ def simulate(req: SimRequest):
             if completion.usage.prompt_tokens_details
             else 0
         )
-        print(task_type, cached_tokens)
+        #print(task_type, cached_tokens)
         # 解析 assistant 文本
         assistant_text = ""
         try:
