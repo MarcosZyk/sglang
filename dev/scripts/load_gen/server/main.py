@@ -16,7 +16,7 @@ import uvicorn
 import argparse
 
 # 配置日志
-logging.basicConfig(level=logging.info)
+#logging.basicConfig(level=logging.info)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="LLM Agent Simulator")
