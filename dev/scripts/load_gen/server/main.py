@@ -351,7 +351,7 @@ def run_server(host: str = "0.0.0.0", port: int = 12306, workers: int = 1):
         workers=workers,
         loop="asyncio",
         http="httptools",
-        log_level="warning",
+        log_level="info",
         access_log=False,
         limit_concurrency=500,
         backlog=2048,
