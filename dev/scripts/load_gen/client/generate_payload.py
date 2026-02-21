@@ -60,7 +60,7 @@ def read_replay_data(file_path: Optional[str] = None, model_name: str = None):
         result["m_list"].append(item["m_list"])
         result["a_list"].append(item["a_list"])
         result["b_list"].append(item["b_list"])
-        result["role_list"].append(item["role_list"])
+        result["roles_list"].append(item["role_list"])
         result["wait_time"].append(item["wait_time"])
         result["task_list"].append(item["task_list"])
     
