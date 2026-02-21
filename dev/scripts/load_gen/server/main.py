@@ -122,7 +122,7 @@ def simulate_sync(req_dict: Dict) -> Dict:
 
     file = open(f'../result/{rid}.csv', 'a', newline='', encoding='utf-8')
     csv_writer = csv.writer(file)
-    csv_writer.writerow(['task_type', 'num_prefill_tokens', 'num_decode_tokens', 'num_cached_tokens', 'prefill_time', 'decode_time', 'num_local_cache_tokens', 'num_global_cached_tokens'])
+    csv_writer.writerow(['task_type', 'num_prefill_tokens', 'num_decode_tokens', 'num_cached_tokens', 'prefill_time', 'sum_decode_time', 'tpot', 'p50_tpot', 'p95_tpot', 'num_local_cache_tokens', 'num_global_cached_tokens'])
 
     start_time = time.perf_counter()
     
