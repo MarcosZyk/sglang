@@ -16,6 +16,8 @@ from urllib3.util.retry import Retry
 from .generate_payload import read_replay_data
 from pydantic import BaseModel
 
+import time
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -215,6 +217,7 @@ class LoadGenerator:
         sim_data = self.sim_config
         
         try:
+            logger.info(f'now time is {time.time()}')
             response = self.session.post(
                 f"{self.server_url}/api/process",
                 json=sim_data,
