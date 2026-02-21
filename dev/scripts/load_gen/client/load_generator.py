@@ -280,6 +280,7 @@ class LoadGenerator:
         """运行负载测试"""
         logger.info(f"Starting load test: {self.total_requests} requests at {self.rps} RPS")
         logger.info(f"Target server: {self.server_url}")
+        logger.info(f"SimRequest: {self.sim_config}")
         logger.info(f"SimRequest config: n={self.sim_config["n"]}, n_task={self.sim_config["n_task"]}")
         
         self.stats = LoadTestStats()
