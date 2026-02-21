@@ -117,7 +117,7 @@ def simulate_sync(req_dict: Dict) -> Dict:
     关键：这个函数会在线程池中执行，所以不会阻塞事件循环
     不同请求可以并行执行，但每个请求内部保持顺序
     """
-    rid = str(uuid.uuid64())
+    rid = str(uuid.uuid4())
 
     file = open(f'result/{rid}.csv', 'r+')
     csv_writer = csv.writer(file)
