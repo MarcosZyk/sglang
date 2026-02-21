@@ -345,7 +345,7 @@ async def root():
 def run_server(host: str = "0.0.0.0", port: int = 12306, workers: int = 1):
     """启动服务器"""
     uvicorn.run(
-        "server:app",
+        "main:app",
         host=host,
         port=port,
         workers=workers,
