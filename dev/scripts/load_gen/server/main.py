@@ -171,7 +171,7 @@ async def root():
 
 
 def run_server(host: str = "0.0.0.0", port: int = 12306, 
-               max_concurrent: int = 32, work_delay: float = 0.01):
+               max_concurrent: int = 32, work_delay: float = 0.01, http_threads: int = 32):
     """启动服务器"""
     global server_config
     server_config = ServerConfig(
@@ -186,6 +186,7 @@ def run_server(host: str = "0.0.0.0", port: int = 12306,
         host=host,
         port=port,
         workers=1,
+        http_threads=http_threads,
         log_level="info"
     )
 
