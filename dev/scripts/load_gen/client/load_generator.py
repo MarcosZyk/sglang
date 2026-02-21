@@ -153,7 +153,6 @@ class TokenBucket:
     def acquire(self) -> float:
         """获取一个令牌，如果需要则等待"""
         wait_time = 0.0
-        logger.info(f"tokens is {self.tokens}, wait time is {wait_time}")
         with self._lock:
             now = time.perf_counter()
             elapsed = now - self.last_update
@@ -312,7 +311,7 @@ class LoadGenerator:
         except:
             pass
         
-        max_workers = min(100, max(10, int(self.rps * 2)))
+        max_workers = min(100, max(32, int(self.rps * 2)))
         logger.info(f"Using {max_workers} worker threads")
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
