@@ -116,8 +116,6 @@ def simulate_sync(req_dict: Dict) -> Dict:
     不同请求可以并行执行，但每个请求内部保持顺序
     """
     start_time = time.perf_counter()
-
-    logger.info(f"Recv Req at: {time.time()} ")
     
     # 从字典重建 SimRequest 对象
     req = SimRequest(**req_dict)
@@ -299,7 +297,7 @@ async def process_request(req: SimRequest):
     """
     # 将请求放到线程池中执行
     loop = asyncio.get_event_loop()
-    logger.info(f"Recv Req at: {time.time()}")
+    print(f"Recv Req at: {time.time()}", flush=True)
     
     try:
         # 关键：使用线程池执行同步的 simulate_sync 函数
