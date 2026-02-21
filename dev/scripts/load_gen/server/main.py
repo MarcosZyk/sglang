@@ -224,7 +224,7 @@ def run_server(host: str = "0.0.0.0", port: int = 8000,
         host=host,
         port=port,
         workers=1,  # 保持单 worker 保证并发控制准确
-        http="httptools",
+       # http="httptools",
         #http_threads=http_threads,  # 增加 HTTP 处理线程
         loop="asyncio",
         log_level="warning",  # 降低日志级别
