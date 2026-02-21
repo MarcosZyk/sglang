@@ -153,7 +153,7 @@ class TokenBucket:
     def acquire(self) -> float:
         """获取一个令牌，如果需要则等待"""
         wait_time = 0.0
-        
+        logger.info(f"tokens is {self.tokens}, wait time is {wait_time}")
         with self._lock:
             now = time.perf_counter()
             elapsed = now - self.last_update
@@ -165,8 +165,7 @@ class TokenBucket:
                 self.last_update += wait_needed
                 self.tokens = 0
                 wait_time = wait_needed
-                logger.info(f"tokens is {self.tokens}, wait time is {wait_time}")
-        
+       
         if wait_time > 0:
             time.sleep(wait_time)
         
