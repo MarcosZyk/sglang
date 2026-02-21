@@ -342,7 +342,7 @@ async def root():
     })
 
 
-def run_server(host: str = "0.0.0.0", port: int = 8000, workers: int = 1):
+def run_server(host: str = "0.0.0.0", port: int = 12306, workers: int = 1):
     """启动服务器"""
     uvicorn.run(
         "server:app",
@@ -362,7 +362,7 @@ def run_server(host: str = "0.0.0.0", port: int = 8000, workers: int = 1):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--port", type=int, default=12306)
     parser.add_argument("--workers", type=int, default=1, help="Number of uvicorn workers")
     args = parser.parse_args()
     
