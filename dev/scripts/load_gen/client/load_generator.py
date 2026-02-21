@@ -216,7 +216,6 @@ class LoadGenerator:
         sim_data = self.sim_config
         
         try:
-            logger.info(f'now time is {time.time()}')
             response = self.session.post(
                 f"{self.server_url}/api/process",
                 json=sim_data,
