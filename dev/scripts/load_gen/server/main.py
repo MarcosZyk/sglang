@@ -14,6 +14,8 @@ from openai import OpenAI  # 保持同步客户端
 from transformers import AutoTokenizer
 import uvicorn
 import argparse
+import uuid
+import csv
 
 # 配置日志
 #logging.basicConfig(level=logging.info)
@@ -115,6 +117,12 @@ def simulate_sync(req_dict: Dict) -> Dict:
     关键：这个函数会在线程池中执行，所以不会阻塞事件循环
     不同请求可以并行执行，但每个请求内部保持顺序
     """
+    rid = str(uuid.uuid64())
+
+    file = open(f'result/{rid}.csv', 'r+')
+    csv_writer = csv.writer(file)
+    csv_writer.writerow(['task_type', 'num_prefill_tokens', 'num_decode_tokens', 'num_cached_tokens', 'prefill_time', 'decode_time', 'num_local_cache_tokens', 'num_global_cached_tokens'])
+
     start_time = time.perf_counter()
     
     # 从字典重建 SimRequest 对象
@@ -267,6 +275,15 @@ def simulate_sync(req_dict: Dict) -> Dict:
         this_round_prompt_token_ids.append(assistant_token_ids)
         prev_msg_token_ids_per_round[task_type].append(this_round_prompt_token_ids)
         
+        cached_tokens = (
+            completion.usage.prompt_tokens_details.cached_tokens
+            if completion.usage.prompt_tokens_details
+            else 0
+        )
+
+        write_result = [task_type, completion.usage.prompt_tokens, completion.usage.completion_tokens, cached_tokens, completion.prefill_time, completion.decode_time, completion.num_local_cache, completion.num_global_cache]
+        csv_writer.writerow(write_result)
+
         # 等待指定时间（模拟 tool 调用延迟）
         if req.wait_time and req.wait_time[i] > 0:
             time.sleep(req.wait_time[i])
@@ -276,6 +293,8 @@ def simulate_sync(req_dict: Dict) -> Dict:
     
     logger.info(f"Request completed in {processing_time:.3f}s")
     
+    file.close()
+
     return {
         "history_rounds": history_rounds,
         "prev_msg_token_ids_per_round": prev_msg_token_ids_per_round,
@@ -297,9 +316,8 @@ async def process_request(req: SimRequest):
     """
     # 将请求放到线程池中执行
     loop = asyncio.get_event_loop()
-    print(req)
     #print(f"Recv Req at: {time.time()}", flush=True)
-    
+
     try:
         # 关键：使用线程池执行同步的 simulate_sync 函数
         result = await loop.run_in_executor(
