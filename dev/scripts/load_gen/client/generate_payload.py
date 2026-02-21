@@ -41,7 +41,7 @@ def read_replay_data(file_path: Optional[str] = None, model_name: str = None):
     # 初始化结果字典
     result = {
         "n": len(data),  # JSON文件中的{}个数总和
-        "n_task": len(set(item["task_list"] for item in data)),  # task_list中的数值种类总数
+        "n_task": 10,#len(set(item["task_list"] for item in data)),  # task_list中的数值种类总数
         "s_list": [],
         "m_list": [],
         "a_list": [],
