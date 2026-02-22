@@ -160,16 +160,13 @@ class ArtesiaRadixCache(RadixCache):
 
         logger.info(f"Retrieve Time: {end_retrieve - start_retrieve}s")
 
-
-        num_global_cache = num_retrieved
-
-        logger.info("Retrieved token num %s from Artesia", num_retrieved)
         if num_retrieved > 0:
             prefix_pad = num_retrieved % self.page_size
-            self.token_to_kv_pool_allocator.free(
-                token_slots[(num_retrieved - prefix_pad) :]
-            )
             fetched = num_retrieved - prefix_pad
+            self.token_to_kv_pool_allocator.free(
+                token_slots[fetched :]
+            )
+            logger.info("Retrieved token num %s from Artesia， used %s", num_retrieved, fetched)
             new_node = TreeNode()
             start = value.numel()
             end = start + fetched
@@ -182,7 +179,6 @@ class ArtesiaRadixCache(RadixCache):
             value = torch.cat([value, token_slots[:fetched]])
             self.evictable_size_ += fetched
 
-            self._record_store_event(new_node.parent)
             self._record_store_event(new_node)
 
             return MatchResult(
@@ -190,9 +186,10 @@ class ArtesiaRadixCache(RadixCache):
                     last_device_node=last_node,
                     last_host_node=last_node,
                     num_local_cache=num_local_cache,
-                    num_global_cache=num_global_cache
+                    num_global_cache=fetched
                 )
         else:
+            logger.info("Retrieved token num 0 from Artesia")
             self.token_to_kv_pool_allocator.free(token_slots)
             #return base_res
             return MatchResult(
@@ -200,7 +197,7 @@ class ArtesiaRadixCache(RadixCache):
                     last_device_node=last_node,
                     last_host_node=last_node,
                     num_local_cache=num_local_cache,
-                    num_global_cache=num_global_cache
+                    num_global_cache=0
                 )
 
     def cache_finished_req(self, req: "Req") -> None:  # type: ignore[override]
