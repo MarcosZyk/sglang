@@ -201,7 +201,7 @@ class ArtesiaRadixCache(RadixCache):
                 )
 
     def cache_finished_req(self, req: "Req") -> None:  # type: ignore[override]
-        """On request completion, insert device KV into radix and store to LMCache."""
+        """On request completion, insert device KV into radix and store to Artesia."""
 
         token_ids = (req.origin_input_ids + req.output_ids)[:-1]
         kv_indices = self.req_to_token_pool.req_to_token[
