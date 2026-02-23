@@ -970,7 +970,9 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
             error_msg = (
                 f"{phase_str} out of memory. Try to lower your batch size.\n"
                 f"Try to allocate {num_tokens} tokens.\n"
-                f"{self._available_and_evictable_str()}"
+                f"{self._available_and_evictable_str()} \n"
+                f"Protected Tokens: {self.tree_cache.protected_size()} \n"
+                f"Total Tokens: {self.tree_cache.total_size()} \n"
             )
             logger.error(error_msg)
             if self.tree_cache is not None:

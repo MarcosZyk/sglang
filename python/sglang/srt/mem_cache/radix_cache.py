@@ -306,6 +306,7 @@ class RadixCache(BasePrefixCache):
             x = heapq.heappop(leaves)
 
             if x == self.root_node:
+                print(f"Meet root during eviction while left {len(leaves)}", flush=True)
                 break
             if x.lock_ref > 0:
                 continue
@@ -318,6 +319,7 @@ class RadixCache(BasePrefixCache):
                 heapq.heappush(leaves, x.parent)
 
             self._record_remove_event(x)
+        print(f"Evict #tokens: {num_evicted}. Evictable #tokens {self.evictable_size_}", flush=True)
 
     def inc_lock_ref(self, node: TreeNode):
         if self.disable:
