@@ -136,7 +136,10 @@ class ArtesiaRadixCache(RadixCache):
             return base_res
 
         if self.token_to_kv_pool_allocator.available_size() < uncached_len:
+            self.inc_lock_ref(last_node)
+            # the matched prefix shall not be evicted
             self.evict(uncached_len)
+            self.dec_lock_ref(last_node)
 
         token_slots = self.token_to_kv_pool_allocator.alloc(uncached_len)
         if token_slots is None:
