@@ -672,6 +672,8 @@ class SchedulerDisaggregationDecodeMixin:
             prepare_mlp_sync_flag = require_mlp_sync(self.server_args)
 
             if batch:
+                for num, _ in enumerate(batch.reqs):
+                    batch.reqs[num].push_to_model_runner_time.append(self.start_exe_time)
                 # Generate fake extend output.
                 if batch.forward_mode.is_extend():
                     # Note: Logprobs should be handled on the prefill engine.

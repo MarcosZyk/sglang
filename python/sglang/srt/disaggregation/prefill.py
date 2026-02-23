@@ -280,6 +280,8 @@ class SchedulerDisaggregationPrefillMixin:
             self.cur_batch = batch
 
             if batch:
+                for num, _ in enumerate(batch.reqs):
+                    batch.reqs[num].push_to_model_runner_time.append(self.start_exe_time)
                 result = self.run_batch(batch)
                 self.process_batch_result_disagg_prefill(batch, result)
 
