@@ -57,7 +57,7 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from sglang.srt.managers.schedule_batch import Req
     from sglang.srt.managers.scheduler import Scheduler
-
+import time
 
 class DecodeReqToTokenPool:
     """
@@ -666,6 +666,9 @@ class SchedulerDisaggregationDecodeMixin:
             self.process_input_requests(recv_reqs)
             # polling and allocating kv cache
             self.process_decode_queue()
+
+            torch.cuda.synchronize()
+            self.start_exe_time: float = time.perf_counter()
             batch = self.get_next_disagg_decode_batch_to_run()
             self.cur_batch = batch
 

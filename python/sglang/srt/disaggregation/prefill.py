@@ -51,6 +51,7 @@ if TYPE_CHECKING:
 
     from sglang.srt.managers.scheduler import GenerationBatchResult, Scheduler
     from sglang.srt.mem_cache.memory_pool import KVCache
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -273,12 +274,15 @@ class SchedulerDisaggregationPrefillMixin:
                 self.disagg_prefill_bootstrap_queue.pop_bootstrapped()
             )
             self.process_prefill_chunk()
+
+            torch.cuda.synchronize()
+            self.start_exe_time: float = time.perf_counter()
             batch = self.get_new_batch_prefill()
 
             if require_mlp_sync(self.server_args):
                 batch = self.prepare_mlp_sync_batch(batch)
+            
             self.cur_batch = batch
-
             if batch:
                 for num, _ in enumerate(batch.reqs):
                     batch.reqs[num].push_to_model_runner_time.append(self.start_exe_time)
