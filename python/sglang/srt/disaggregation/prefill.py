@@ -457,6 +457,22 @@ class SchedulerDisaggregationPrefillMixin:
                     self.send_kv_chunk(req, last_chunk=False, end_idx=req.tmp_end_idx)
 
         # We need to remove the sync in the following function for overlap schedule.
+
+        torch.cuda.synchronize()
+        self.end_exe_time = time.perf_counter()
+        for num, req in enumerate(batch.reqs):
+            start_exe_time = req.push_to_model_runner_time.popleft()
+            #logger.info(f'inference step time: {self.end_exe_time - start_exe_time}')
+            if(batch.forward_mode == ForwardMode.EXTEND):
+                batch.reqs[num].prefill_time = batch.reqs[num].prefill_time + self.end_exe_time - start_exe_time
+            elif(batch.forward_mode == ForwardMode.DECODE):
+                batch.reqs[num].decode_time.append(self.end_exe_time - start_exe_time)
+            elif(batch.forward_mode == ForwardMode.MIXED and req not in batch.decoding_reqs):
+                batch.reqs[num].prefill_time = batch.reqs[num].prefill_time + self.end_exe_time - start_exe_time
+            elif(batch.forward_mode == ForwardMode.MIXED and req in batch.decoding_reqs):
+                batch.reqs[num].decode_time.append(self.end_exe_time - start_exe_time)
+
+
         self.set_next_batch_sampling_info_done(batch)
 
     def process_disagg_prefill_inflight_queue(
@@ -512,6 +528,7 @@ class SchedulerDisaggregationPrefillMixin:
                 assert False, f"Unexpected polling state {poll=}"
 
         # Stream requests which have finished transfer
+
         self.stream_output(
             done_reqs,
             any(req.return_logprob for req in done_reqs),
