@@ -103,8 +103,8 @@ class MiniLoadBalancer:
             else:
                 ret_json = await decode_response.json()
                 prefill_json = await prefill_response.json()
-                ret_json["num_local_cached_tokens"] = prefill_json["num_local_cached_tokens"]
-                ret_json["num_global_cached_tokens"] = prefill_json["num_global_cached_tokens"]
+                ret_json["num_local_cache"] = prefill_json["num_local_cache"]
+                ret_json["num_global_cache"] = prefill_json["num_global_cache"]
                 ret_json["prefill_time"] = ret_json["prefill_time"] + prefill_json["prefill_time"]
 
             return ORJSONResponse(
