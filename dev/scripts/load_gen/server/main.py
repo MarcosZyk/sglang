@@ -256,7 +256,7 @@ def simulate_sync(req_dict: Dict) -> Dict:
                 temperature=req.temperature,
                 top_logprobs=1,
                 extra_body={
-                    "ignore_eos": False  # 将参数放在这里
+                    "ignore_eos": True  # 将参数放在这里
                 }
             )
         except Exception as e:
