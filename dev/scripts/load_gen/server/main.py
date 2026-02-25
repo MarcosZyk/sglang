@@ -282,7 +282,7 @@ def simulate_sync(req_dict: Dict) -> Dict:
         else:
             assistant_text = response.choices[0].message.content
         
-        ssistant_token_ids = tokenizer.encode(assistant_text, add_special_tokens=False)
+        assistant_token_ids = tokenizer.encode(assistant_text, add_special_tokens=False)
 
         #try:
         #    assistant_token_ids = tokenizer.encode(assistant_text, add_special_tokens=False)
