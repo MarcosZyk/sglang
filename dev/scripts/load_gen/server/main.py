@@ -268,8 +268,12 @@ def simulate_sync(req_dict: Dict) -> Dict:
             except Exception:
                 print(completion)
                 assistant_text = ""
-
-        assistant_token_ids = tokenizer.encode(assistant_text, add_special_tokens=False)
+        
+        try:
+            assistant_token_ids = tokenizer.encode(assistant_text, add_special_tokens=False)
+        except Exception:
+            print(completion)
+            assistant_token_ids = []
         
         # 存储历史记录
         round_messages.append({"assistant": assistant_text})
