@@ -712,8 +712,8 @@ class SchedulerOutputProcessorMixin:
                 return
             decode_times_items = [len(item) for item in decode_times]
             len_test = []
-            for decode_times_item, decode_text in zip(decode_times_item, decode_text):
-                if(decode_times_item > 0):
+            for item, decode_text in zip(decode_times_items, decode_text):
+                if(item > 0):
                     len_test.append(len(decode_text))
                 else:
                     len_test.append(decode_text)
