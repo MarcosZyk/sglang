@@ -253,6 +253,7 @@ def simulate_sync(req_dict: Dict) -> Dict:
                 messages=call_messages,
                 max_tokens=s_list[i],
                 temperature=req.temperature,
+                ignore_eos=True
             )
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"OpenAI API call failed: {e}")
