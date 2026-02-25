@@ -593,8 +593,6 @@ class SchedulerOutputProcessorMixin:
                     req.send_output_token_logprobs_offset
                 )
                 rids.append(req.rid)
-                if(not req.finished_reason):
-                    logger.info(f'req {req.rid} finished error!')
                 finished_reasons.append(
                     req.finished_reason.to_json() if req.finished_reason else None
                 )
