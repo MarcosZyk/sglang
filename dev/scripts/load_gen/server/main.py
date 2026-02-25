@@ -231,8 +231,8 @@ def simulate_sync(req_dict: Dict) -> Dict:
             # decode -> prompt text
             prompt_text = tokenizer.decode(
                 token_ids, 
-                skip_special_tokens=True, 
-                clean_up_tokenization_spaces=True
+                skip_special_tokens=False, 
+                #clean_up_tokenization_spaces=True
             )
             
             this_round_prompt_token_ids.append(token_ids)
@@ -252,29 +252,43 @@ def simulate_sync(req_dict: Dict) -> Dict:
                 model=openai_model,
                 messages=call_messages,
                 max_tokens=s_list[i],
+                logprobs=True,
                 temperature=req.temperature,
-                ignore_eos=True
+                top_logprobs=1,
+                extra_body={
+                    "ignore_eos": False  # 将参数放在这里
+                }
             )
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"OpenAI API call failed: {e}")
         
         # 解析 assistant 文本
-        assistant_text = ""
-        try:
-            assistant_text = completion.choices[0].message.content
-        except Exception:
-            print(completion)
-            try:
-                assistant_text = completion.choices[0].get("message", {}).get("content", "")
-            except Exception:
-                print(completion)
-                assistant_text = ""
+        #assistant_text = ""
+        #try:
+        #    assistant_text = completion.choices[0].message.content
+        #except Exception:
+        #    print(completion)
+        #    try:
+        #        assistant_text = completion.choices[0].get("message", {}).get("content", "")
+        #    except Exception:
+        #        print(completion)
+        #        assistant_text = ""
         
-        try:
-            assistant_token_ids = tokenizer.encode(assistant_text, add_special_tokens=False)
-        except Exception:
-            print(completion)
-            assistant_token_ids = []
+        if response.choices[0].logprobs and response.choices[0].logprobs.content:
+        assistant_text = ""
+        for token_info in response.choices[0].logprobs.content:
+            assistant_text = assistant_text + token_info.token
+        
+        else:
+            assistant_text = response.choices[0].message.content
+        
+        ssistant_token_ids = tokenizer.encode(assistant_text, add_special_tokens=False)
+
+        #try:
+        #    assistant_token_ids = tokenizer.encode(assistant_text, add_special_tokens=False)
+        #except Exception:
+        #    print(completion)
+        #    assistant_token_ids = []
         
         # 存储历史记录
         round_messages.append({"assistant": assistant_text})
