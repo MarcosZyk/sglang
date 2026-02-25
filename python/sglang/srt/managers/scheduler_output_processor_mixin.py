@@ -711,7 +711,13 @@ class SchedulerOutputProcessorMixin:
             if self.model_config.is_multimodal_gen:
                 return
             decode_times_items = [len(item) for item in decode_times]
-            len_test = [len(item) for item in decode_ids_list]
+            len_test = []
+            for decode_times_item, decode_text in zip(decode_times_item, decode_text):
+                if(decode_times_item > 0):
+                    len_test.append(len(decode_text))
+                else:
+                    len_test.append(decode_text)
+            #len_test = [len(item) for item in decode_ids_list]
         
 
             logger.info(f"Detokenizer: {prefill_times}, {finished_reasons}, {decode_times_items}, {len_test}")
