@@ -694,6 +694,7 @@ class Req:
             self.finished_reason = FINISH_ABORT(
                 message=self.to_abort_message,
             )
+            logger.info(f"Abort Req Message: {self.to_abort_message}")
             return
 
         if len(self.output_ids) >= self.sampling_params.max_new_tokens:
@@ -784,6 +785,7 @@ class Req:
         self.grammar = None
         self.origin_input_ids = [0]  # set it to one token to skip the long prefill
         self.return_logprob = False
+        logger.info(f"Abort Req: {error_msg}")
         self.finished_reason = FINISH_ABORT(
             error_msg, HTTPStatus.BAD_REQUEST, "BadRequestError"
         )
