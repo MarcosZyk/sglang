@@ -262,11 +262,13 @@ def simulate_sync(req_dict: Dict) -> Dict:
         try:
             assistant_text = completion.choices[0].message.content
         except Exception:
+            print(completion)
             try:
                 assistant_text = completion.choices[0].get("message", {}).get("content", "")
             except Exception:
+                print(completion)
                 assistant_text = ""
-        
+
         assistant_token_ids = tokenizer.encode(assistant_text, add_special_tokens=False)
         
         # 存储历史记录
