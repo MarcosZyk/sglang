@@ -174,7 +174,7 @@ def simulate_sync(req_dict: Dict) -> Dict:
             OpenAI(
                 api_key="EMPTY", 
                 base_url=f"http://localhost:{port}/v1",
-                timeout=300.0,  # 增加超时
+                timeout=1800,  # 增加超时
                 max_retries=0
             )
         )
@@ -387,7 +387,7 @@ def run_server(host: str = "0.0.0.0", port: int = 12306, workers: int = 1):
         access_log=False,
         limit_concurrency=500,
         backlog=2048,
-        timeout_keep_alive=30,
+        timeout_keep_alive=1800,
     )
 
 
