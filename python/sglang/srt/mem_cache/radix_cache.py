@@ -574,14 +574,15 @@ class RadixCache(BasePrefixCache):
         head_num = k_pool[0].shape[1]
         head_dim = k_pool[0].shape[2]
         dtype = k_pool[0].dtype
+        device = k_pool[0].device
         collected_kv = []
         for layer in range(len(k_pool)):
-            layer_kv = torch.empty([2, len(token_ids), head_num, head_dim], dtype=dtype)
+            layer_kv = torch.empty([2, len(token_ids), head_num, head_dim], dtype=dtype, device=device)
             torch.index_select(
-                k_pool[layer], dim=0, index=kv_indices.to("cuda:0"), out=layer_kv[0]
+                k_pool[layer], dim=0, index=kv_indices, out=layer_kv[0]
             )
             torch.index_select(
-                v_pool[layer], dim=0, index=kv_indices.to("cuda:0"), out=layer_kv[1]
+                v_pool[layer], dim=0, index=kv_indices, out=layer_kv[1]
             )
             collected_kv.append(layer_kv)
         return collected_kv
