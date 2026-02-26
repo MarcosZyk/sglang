@@ -555,6 +555,37 @@ class RadixCache(BasePrefixCache):
         self.kv_event_queue = []
         return events
 
+    def dump_kv_cache(self, req: "Req") -> list[torch.Tensor]:
+        token_ids = (req.origin_input_ids + req.output_ids)
+        kv_indices = self.req_to_token_pool.req_to_token[
+            req.req_pool_idx, : len(token_ids)
+        ]
+        kvcache = self.token_to_kv_pool_allocator.get_kvcache()
+        k_pool = getattr(
+            kvcache,
+            "k_buffer",
+            getattr(self.token_to_kv_pool_allocator._kvcache, "k_buffer"),
+        )
+        v_pool = getattr(
+            kvcache,
+            "v_buffer",
+            getattr(self.token_to_kv_pool_allocator._kvcache, "v_buffer"),
+        )
+        head_num = k_pool[0].shape[1]
+        head_dim = k_pool[0].shape[2]
+        dtype = k_pool[0].dtype
+        collected_kv = []
+        for layer in range(len(k_pool)):
+            layer_kv = torch.empty([2, len(token_ids), head_num, head_dim], dtype=dtype)
+            torch.index_select(
+                k_pool[layer], dim=0, index=kv_indices, out=layer_kv[0]
+            )
+            torch.index_select(
+                v_pool[layer], dim=0, index=kv_indices, out=layer_kv[1]
+            )
+            collected_kv.append(layer_kv)
+        return collected_kv
+
 
 if __name__ == "__main__":
     tree = RadixCache(None, None, page_size=1, disable=False)

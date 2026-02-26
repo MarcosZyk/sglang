@@ -109,3 +109,8 @@ class BasePrefixCache(ABC):
 
     def take_events(self):
         return []
+
+    def dump_kv_cache(self, req: "Req") -> list[torch.Tensor]:
+        # return layer-wise kv cache of given request
+        # layer -> tensor with shape [2, seq_len, head_num, head_dim]
+        return []
