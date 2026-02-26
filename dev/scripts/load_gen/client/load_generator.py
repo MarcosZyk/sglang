@@ -13,7 +13,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from .generate_payload import read_replay_data
+from generate_payload import read_replay_data
 from pydantic import BaseModel
 import argparse
 import time
