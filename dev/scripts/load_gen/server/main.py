@@ -232,8 +232,8 @@ def simulate_sync(req_dict: Dict) -> Dict:
             # decode -> prompt text
             prompt_text = tokenizer.decode(
                 token_ids, 
-                skip_special_tokens=False, 
-                #clean_up_tokenization_spaces=True
+                skip_special_tokens=True, 
+                clean_up_tokenization_spaces=True
             )
             
             this_round_prompt_token_ids.append(token_ids)
