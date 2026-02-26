@@ -275,7 +275,10 @@ def simulate_sync(req_dict: Dict) -> Dict:
         #        print(completion)
         #        assistant_text = ""
         
-        if(completion.choices[0].message.content == None):
+        try:
+            assistant_text = completion.choices[0].message.content
+            tokenizer.encode(assistant_text, add_special_tokens=False)
+        except Exception:
             rid = completion.id
             with open(f'test1-{rid}-prompt.json', 'w', encoding='utf-8') as file:
                 json.dump(call_messages, file, indent=4)
