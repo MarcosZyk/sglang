@@ -274,13 +274,13 @@ def simulate_sync(req_dict: Dict) -> Dict:
         #        print(completion)
         #        assistant_text = ""
         
-        if response.choices[0].logprobs and response.choices[0].logprobs.content:
+        if completion.choices[0].logprobs and completion.choices[0].logprobs.content:
             assistant_text = ""
-            for token_info in response.choices[0].logprobs.content:
+            for token_info in completion.choices[0].logprobs.content:
                 assistant_text = assistant_text + token_info.token
         
         else:
-            assistant_text = response.choices[0].message.content
+            assistant_text = completion.choices[0].message.content
         
         assistant_token_ids = tokenizer.encode(assistant_text, add_special_tokens=False)
 
