@@ -264,18 +264,17 @@ def simulate_sync(req_dict: Dict) -> Dict:
             raise HTTPException(status_code=500, detail=f"OpenAI API call failed: {e}")
         
         # 解析 assistant 文本
-        #assistant_text = ""
-        #try:
-        #    assistant_text = completion.choices[0].message.content
-        #except Exception:
-        #    print(completion)
-        #    try:
-        #        assistant_text = completion.choices[0].get("message", {}).get("content", "")
-        #    except Exception:
-        #        print(completion)
-        #        assistant_text = ""
+        assistant_text = ""
+        try:
+            assistant_text = completion.choices[0].message.content
+        except Exception:
+            print(completion)
+            try:
+                assistant_text = completion.choices[0].get("message", {}).get("content", "")
+            except Exception:
+                print(completion)
+                assistant_text = ""
 
-        assistant_text = completion.choices[0].message.content
         try:
             tokenizer.encode(assistant_text, add_special_tokens=False)
         except Exception:
