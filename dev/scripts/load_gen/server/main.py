@@ -275,9 +275,9 @@ def simulate_sync(req_dict: Dict) -> Dict:
         #        assistant_text = ""
         
         if response.choices[0].logprobs and response.choices[0].logprobs.content:
-        assistant_text = ""
-        for token_info in response.choices[0].logprobs.content:
-            assistant_text = assistant_text + token_info.token
+            assistant_text = ""
+            for token_info in response.choices[0].logprobs.content:
+            a   ssistant_text = assistant_text + token_info.token
         
         else:
             assistant_text = response.choices[0].message.content
