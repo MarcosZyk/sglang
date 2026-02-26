@@ -701,13 +701,7 @@ class SchedulerOutputProcessorMixin:
                         output_hidden_states = []
                     output_hidden_states.append(req.hidden_states)
 
-        
-            if (
-                req.finished()
-                and self.tp_rank == 0
-                and self.server_args.enable_request_time_stats_logging
-            ):
-                req.log_time_stats()
+            if(req.finished()):
                 finish_reason = req.finished_reason.to_json()
                 if(finish_reason["type"] == "stop"):
                     logger.info(f'find stop req{req.rid}')
@@ -719,6 +713,14 @@ class SchedulerOutputProcessorMixin:
                         writer.writerow(origin_input_ids)
                     torch.save(kvcache[0], f'test1-{req.rid}-k.pt')
                     torch.save(kvcache[1], f'test1-{req.rid}-v.pt')
+
+            if (
+                req.finished()
+                and self.tp_rank == 0
+                and self.server_args.enable_request_time_stats_logging
+            ):
+                req.log_time_stats()
+                
 
         # Send to detokenizer
         if rids:
