@@ -733,7 +733,7 @@ class SchedulerOutputProcessorMixin:
             #len_test = [len(item) for item in decode_ids_list]
         
 
-            #logger.info(f"Detokenizer: {prefill_times}, {finished_reasons}, {decode_times_items}, {len_test}")
+            logger.info(f"Detokenizer: {prefill_times}, {finished_reasons}, {decode_times_items}, {len_test}")
             self.send_to_detokenizer.send_pyobj(
                 BatchTokenIDOut(
                     rids,
