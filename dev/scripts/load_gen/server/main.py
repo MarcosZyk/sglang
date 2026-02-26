@@ -253,9 +253,9 @@ def simulate_sync(req_dict: Dict) -> Dict:
                 model=openai_model,
                 messages=call_messages,
                 max_tokens=s_list[i],
-                logprobs=True,
+                #logprobs=True,
                 temperature=req.temperature,
-                top_logprobs=1
+                #top_logprobs=1
                 #extra_body={
                 #    "ignore_eos": False  # 将参数放在这里
                 #}
@@ -274,22 +274,22 @@ def simulate_sync(req_dict: Dict) -> Dict:
         #    except Exception:
         #        print(completion)
         #        assistant_text = ""
-        
+
+        assistant_text = completion.choices[0].message.content
         try:
-            assistant_text = completion.choices[0].message.content
             tokenizer.encode(assistant_text, add_special_tokens=False)
         except Exception:
             rid = completion.id
             with open(f'test1-{rid}-prompt.json', 'w', encoding='utf-8') as file:
                 json.dump(call_messages, file, indent=4)
 
-        if completion.choices[0].logprobs and completion.choices[0].logprobs.content:
-            assistant_text = ""
-            for token_info in completion.choices[0].logprobs.content:
-                assistant_text = assistant_text + token_info.token
+        #if completion.choices[0].logprobs and completion.choices[0].logprobs.content:
+        #    assistant_text = ""
+        #    for token_info in completion.choices[0].logprobs.content:
+        #        assistant_text = assistant_text + token_info.token
         
-        else:
-            assistant_text = completion.choices[0].message.content
+        #else:
+        #    assistant_text = completion.choices[0].message.content
         
         assistant_token_ids = tokenizer.encode(assistant_text, add_special_tokens=False)
 

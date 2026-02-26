@@ -708,8 +708,8 @@ class SchedulerOutputProcessorMixin:
                 and self.server_args.enable_request_time_stats_logging
             ):
                 req.log_time_stats()
-
-                if(isinstance(req.finished_reason, FINISH_MATCHED_TOKEN) == True):
+                finish_reason = req.finished_reason.to_json()
+                if(finish_reason["type"] == "stop"):
                     logger.info(f'find stop req{req.rid}')
                     kvcache = self.tree_cache.dump_kv_cache(req)
                     kvcache = [item.clone().cpu() for item in kvcache]
