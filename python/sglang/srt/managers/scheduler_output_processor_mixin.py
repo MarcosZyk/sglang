@@ -700,7 +700,7 @@ class SchedulerOutputProcessorMixin:
                     if output_hidden_states is None:
                         output_hidden_states = []
                     output_hidden_states.append(req.hidden_states)
-
+            '''
             if(req.finished()):
                 finish_reason = req.finished_reason.to_json()
                 if(finish_reason["type"] == "stop"):
@@ -713,7 +713,7 @@ class SchedulerOutputProcessorMixin:
                         writer.writerow(origin_input_ids)
                     torch.save(kvcache[0], f'test1-{req.rid}-k.pt')
                     torch.save(kvcache[1], f'test1-{req.rid}-v.pt')
-
+            '''
             if (
                 req.finished()
                 and self.tp_rank == 0
