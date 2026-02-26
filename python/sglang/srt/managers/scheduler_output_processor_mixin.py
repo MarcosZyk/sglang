@@ -710,6 +710,7 @@ class SchedulerOutputProcessorMixin:
                 req.log_time_stats()
 
                 if(isinstance(req.finished_reason, FINISH_MATCHED_TOKEN) == True):
+                    logger.info(f'find stop req{req.rid}')
                     kvcache = self.tree_cache.dump_kv_cache(req)
                     kvcache = [item.clone().cpu() for item in kvcache]
                     origin_input_ids = req.origin_input_ids
