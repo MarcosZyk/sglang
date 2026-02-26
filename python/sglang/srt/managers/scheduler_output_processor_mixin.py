@@ -8,8 +8,10 @@ from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 from sglang.srt.managers.io_struct import AbortReq, BatchEmbeddingOut, BatchTokenIDOut
-from sglang.srt.managers.schedule_batch import BaseFinishReason, Req, ScheduleBatch
+from sglang.srt.managers.schedule_batch import BaseFinishReason, Req, ScheduleBatch, FINISH_MATCHED_TOKEN
 from sglang.srt.model_executor.forward_batch_info import ForwardMode, PPProxyTensors
+
+import csv
 
 if TYPE_CHECKING:
     from sglang.srt.managers.scheduler import (
@@ -699,12 +701,23 @@ class SchedulerOutputProcessorMixin:
                         output_hidden_states = []
                     output_hidden_states.append(req.hidden_states)
 
+        
             if (
                 req.finished()
                 and self.tp_rank == 0
                 and self.server_args.enable_request_time_stats_logging
             ):
                 req.log_time_stats()
+
+                if(isinstance(req.finished_reason, FINISH_MATCHED_TOKEN) == True):
+                    kvcache = self.tree_cache.dump_kv_cache(req)
+                    kvcache = [item.clone().cpu() for item in kvcache]
+                    origin_input_ids = req.origin_input_ids
+                    with open(f'test1-{req.rid}.csv', 'w', newline='') as file:
+                        writer = csv.writer(file)
+                        writer.writerow(origin_input_ids)
+                    torch.save(kvcache[0], f'test1-{req.rid}-k.pt')
+                    torch.save(kvcache[1], f'test1-{req.rid}-v.pt')
 
         # Send to detokenizer
         if rids:
