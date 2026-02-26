@@ -17,6 +17,7 @@ import argparse
 import uuid
 import csv
 import numpy as np
+import json
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -254,10 +255,10 @@ def simulate_sync(req_dict: Dict) -> Dict:
                 max_tokens=s_list[i],
                 logprobs=True,
                 temperature=req.temperature,
-                top_logprobs=1,
-                extra_body={
-                    "ignore_eos": True  # 将参数放在这里
-                }
+                top_logprobs=1
+                #extra_body={
+                #    "ignore_eos": False  # 将参数放在这里
+                #}
             )
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"OpenAI API call failed: {e}")
@@ -274,6 +275,11 @@ def simulate_sync(req_dict: Dict) -> Dict:
         #        print(completion)
         #        assistant_text = ""
         
+        if(completion.choices[0].message.content == None):
+            rid = completion.id
+            with open(f'test1-{rid}-prompt.json', 'w', encoding='utf-8') as file:
+                json.dump(call_messages, file, indent=4)
+
         if completion.choices[0].logprobs and completion.choices[0].logprobs.content:
             assistant_text = ""
             for token_info in completion.choices[0].logprobs.content:
