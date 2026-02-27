@@ -1,4 +1,4 @@
-curl -s http://localhost:12306/v1/chat/completions \
+curl -s http://localhost:12347/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "Qwen/Qwen3-8B",
@@ -15,7 +15,7 @@ curl -s http://localhost:12306/v1/chat/completions \
 
 sleep 0.2
 
-curl -s http://localhost:12306/v1/chat/completions \
+curl -s http://localhost:12347/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "Qwen/Qwen3-8B",
@@ -32,7 +32,7 @@ curl -s http://localhost:12306/v1/chat/completions \
 
 sleep 0.2
 
-curl -s http://localhost:12306/v1/chat/completions \
+curl -s http://localhost:12347/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "Qwen/Qwen3-8B",
