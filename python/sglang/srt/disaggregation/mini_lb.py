@@ -106,10 +106,15 @@ class MiniLoadBalancer:
                 ret_json["num_local_cache"] = prefill_json["num_local_cache"]
                 ret_json["num_global_cache"] = prefill_json["num_global_cache"]
                 ret_json["prefill_time"] = ret_json["prefill_time"] + prefill_json["prefill_time"]
-                num_cached_tokens = prefill_json["usage"]["prompt_tokens_details"]["cached_tokens"]
+
+                cached_tokens = (
+                    prefill_json["usage"]["prompt_tokens_details"]["cached_tokens"]
+                    if prefill_json["usage"]["prompt_tokens_details"]
+                    else 0
+                )
                 if(ret_json["usage"]["prompt_tokens_details"] == None):
                     ret_json["usage"]["prompt_tokens_details"] = {}
-                ret_json["usage"]["prompt_tokens_details"]["cached_tokens"] = num_cached_tokens
+                ret_json["usage"]["prompt_tokens_details"]["cached_tokens"] = cached_tokens
 
             return ORJSONResponse(
                 content=ret_json,
