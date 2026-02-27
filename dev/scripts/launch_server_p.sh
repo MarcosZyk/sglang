@@ -8,7 +8,7 @@ CUDA_VISIBLE_DEVICES=$1 python3 -m sglang.launch_server \
     --model-path Qwen/Qwen3-8B \
     --port $2 \
     --enable-mixed-chunk \
-    --chunked-prefill-size 8192 \
+    --chunked-prefill-size 32768 \
     --enable-cache-report \
     --disable-overlap-schedule \
     --enable-artesia
