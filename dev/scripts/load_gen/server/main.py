@@ -123,7 +123,7 @@ def simulate_sync(req_dict: Dict) -> Dict:
 
     file = open(f'../result/{rid}.csv', 'a', newline='', encoding='utf-8')
     csv_writer = csv.writer(file)
-    csv_writer.writerow(['task_type', 'num_prefill_tokens', 'num_decode_tokens', 'num_cached_tokens', 'prefill_time', 'sum_decode_time', 'tpot', 'p50_tpot', 'p95_tpot', 'num_local_cache_tokens', 'num_global_cached_tokens'])
+    csv_writer.writerow(['task_type', 'num_prefill_tokens', 'num_decode_tokens', 'theoretical_cached_tokens', 'num_cached_tokens', 'prefill_time', 'sum_decode_time', 'tpot', 'p50_tpot', 'p95_tpot', 'num_local_cache_tokens', 'num_global_cached_tokens'])
 
     start_time = time.perf_counter()
     
@@ -317,7 +317,9 @@ def simulate_sync(req_dict: Dict) -> Dict:
         p50_decode_time = np.percentile(decode_time, 50)
         p95_decode_time = np.percentile(decode_time, 95)
 
-        write_result = [task_type, completion.usage.prompt_tokens, completion.usage.completion_tokens, cached_tokens, completion.prefill_time, sum_decode_time, avg_decode_time, p50_decode_time, p95_decode_time, completion.num_local_cache, completion.num_global_cache]
+        calculate_cached_tokens = np.sum(b_row)
+
+        write_result = [task_type, completion.usage.prompt_tokens, completion.usage.completion_tokens, calculate_cached_tokens, cached_tokens, completion.prefill_time, sum_decode_time, avg_decode_time, p50_decode_time, p95_decode_time, completion.num_local_cache, completion.num_global_cache]
         csv_writer.writerow(write_result)
 
         # 等待指定时间（模拟 tool 调用延迟）
