@@ -174,7 +174,7 @@ def simulate_sync(req_dict: Dict) -> Dict:
         client_list.append(
             OpenAI(
                 api_key="EMPTY", 
-                base_url=f"http://localhost:{port}/v1",
+                base_url=f"http://localhost:{12347}/v1",
                 timeout=1800,  # 增加超时
                 max_retries=0
             )
