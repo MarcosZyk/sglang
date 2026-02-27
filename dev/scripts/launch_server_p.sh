@@ -11,5 +11,5 @@ CUDA_VISIBLE_DEVICES=$1 python3 -m sglang.launch_server \
     --chunked-prefill-size 8192 \
     --enable-cache-report \
     --disable-overlap-schedule \
-    #--enable-artesia
+    --enable-artesia
     #--max-total-tokens 4096 \
