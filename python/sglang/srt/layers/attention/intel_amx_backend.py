@@ -95,7 +95,7 @@ class IntelAMXAttnBackend(AttentionBackend):
         for core in cores:
             if "-" in core:
                 core = core.split("-")
-                core_number += len(core)
+                core_number += int(core[1]) - int(core[0]) + 1
             else:
                 core_number += 1
         self.core_number = core_number
@@ -128,7 +128,8 @@ class IntelAMXAttnBackend(AttentionBackend):
             forward_batch.head_block_size = 6 if bs == 1 else (22 if bs > 16 else 11)
 
         logger.info(
-            "Forward decode with split_num=%s, head_block_size=%s",
+            "Forward decode with cores=%s, split_num=%s, head_block_size=%s",
+            self.core_number,
             forward_batch.split_num,
             forward_batch.head_block_size,
         )
