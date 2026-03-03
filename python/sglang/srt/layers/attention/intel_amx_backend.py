@@ -126,6 +126,13 @@ class IntelAMXAttnBackend(AttentionBackend):
         else:
             forward_batch.split_num = 8
             forward_batch.head_block_size = 6 if bs == 1 else (22 if bs > 16 else 11)
+
+        logger.info(
+            "Forward decode with split_num=%s, head_block_size=%s",
+            forward_batch.split_num,
+            forward_batch.head_block_size,
+        )
+
         attn_logits = torch.zeros(
             (
                 bs,
