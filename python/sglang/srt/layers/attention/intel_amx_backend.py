@@ -68,9 +68,9 @@ class KernelAutoTuner:
 
     def redundant_io_size(self, block_num: int, block_size: int, split_num: int, split_size: int) -> int:
         if self.is_mla:
-            return self.q_dim * block_size + self.kv_dim * split_size
+            return self.q_dim * block_size * split_num + self.kv_dim * split_size * block_num
         else:
-            return self.q_dim * block_size + 2 * self.kv_dim * split_size
+            return self.q_dim * block_size * split_num + 2 * self.kv_dim * split_size * block_num
 
 
 class IntelAMXAttnBackend(AttentionBackend):
