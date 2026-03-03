@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+import math
+import os
 from typing import TYPE_CHECKING
 
 import torch
@@ -10,6 +13,64 @@ from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 if TYPE_CHECKING:
     from sglang.srt.layers.radix_attention import RadixAttention
     from sglang.srt.model_executor.model_runner import ModelRunner
+
+
+logger = logging.getLogger(__name__)
+
+
+
+class KernelAutoTuner:
+
+    # L: sequence Length; l: split length;      s: split num
+    # H: head num;        h: head block size;   b: block num
+    # C: core num
+    # Constraints: s * b = C, s * b means the num of parallel unit
+    # MLA Target: min(head_dim * h * s + kv_dim * l * b)
+    # MHA/GQA Target: min(head_dim * h * s + 2 * kv_dim * l * b)
+
+    def __init__(
+        self,
+        q_head_num: int,
+        q_dim: int,
+        kv_dim: int,
+        is_mla: bool,
+        core_number: int,
+    ):
+        self.q_head_num = q_head_num
+        self.q_dim = q_dim
+        self.kv_dim = kv_dim
+        self.is_mla = is_mla
+        self.core_number = core_number
+
+        self.factor_pair_list = []
+        for i in range(1, int(self.core_number ** 0.5) + 1):
+            if self.core_number % i == 0:
+                self.factor_pair_list.append((i, self.core_number // i))
+
+    def calculate_config(self, seq_len: int) -> tuple[int, int]:
+        # input sequence length, output (head block size, split num)
+        index = 0
+        minimal_overhead = -1
+        for i, factor_pair in enumerate(self.factor_pair_list):
+            block_num = factor_pair[0]
+            split_num = factor_pair[1]
+
+            block_size = math.ceil(self.q_head_num / block_num)
+            split_size = math.ceil(seq_len / split_num)
+
+            overhead = self.redundant_io_size(block_num, block_size, split_num, split_size)
+            if minimal_overhead > overhead or minimal_overhead == -1:
+                minimal_overhead = overhead
+                index = i
+
+        return self.factor_pair_list[index]
+
+
+    def redundant_io_size(self, block_num: int, block_size: int, split_num: int, split_size: int) -> int:
+        if self.is_mla:
+            return self.q_dim * block_size * split_num + self.kv_dim * split_size * block_num
+        else:
+            return self.q_dim * block_size * split_num + 2 * self.kv_dim * split_size * block_num
 
 
 class IntelAMXAttnBackend(AttentionBackend):
@@ -26,18 +87,50 @@ class IntelAMXAttnBackend(AttentionBackend):
 
         self.v_head_dim = model_runner.token_to_kv_pool.get_value_buffer(0).shape[-1]
 
-        self.decode_attention_fwd = torch.ops.sgl_kernel.decode_attention_cpu
+        self.decode_attention_fwd = torch.ops.sgl_kernel.decode_attention_cpu_v2
         self.extend_attention_fwd = torch.ops.sgl_kernel.extend_attention_cpu
+
+        cores = model_runner.local_omp_cpuid.split(",")
+        core_number = 0
+        for core in cores:
+            if "-" in core:
+                core = core.split("-")
+                core_number += len(core)
+            else:
+                core_number += 1
+        self.core_number = core_number
+
+        self.auto_tune = int(os.getenv("AMX_KERNEL_AUTO_TUNE", 0)) == 1
+        if model_runner.use_mla_backend:
+            q_head_dim = model_runner.model_config.qk_nope_head_dim + model_runner.model_config.qk_rope_head_dim
+        else:
+            q_head_dim = model_runner.model_config.head_dim
+        self.tuner = KernelAutoTuner(
+            self.num_head,
+            q_head_dim,
+            self.v_head_dim,
+            model_runner.use_mla_backend,
+            self.core_number
+        )
+
 
     def init_forward_metadata(self, forward_batch: ForwardBatch):
         """Init the metadata for a forward pass."""
 
         bs = forward_batch.batch_size
+        if self.auto_tune:
+            # todo consider bs > 1
+            block_size, split_num = self.tuner.calculate_config(forward_batch.seq_lens_sum)
+            forward_batch.split_num = split_num
+            forward_batch.head_block_size = block_size
+        else:
+            forward_batch.split_num = 8
+            forward_batch.head_block_size = 6 if bs == 1 else (22 if bs > 16 else 11)
         attn_logits = torch.zeros(
             (
                 bs,
                 self.num_head,
-                8,  # self.num_kv_splits,
+                forward_batch.split_num,  # self.num_kv_splits,
                 self.v_head_dim + 1,
             ),
             dtype=torch.float32,
@@ -123,6 +216,7 @@ class IntelAMXAttnBackend(AttentionBackend):
             forward_batch.seq_lens,
             layer.scaling,
             layer.logit_cap,
+            forward_batch.head_block_size
         )
 
         return o

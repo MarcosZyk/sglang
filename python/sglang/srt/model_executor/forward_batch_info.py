@@ -309,6 +309,9 @@ class ForwardBatch:
     tbo_parent_token_range: Optional[Tuple[int, int]] = None
     tbo_children: Optional[List[ForwardBatch]] = None
 
+    split_num: Optional[int] = 8
+    head_block_size: Optional[int] = 6
+
     @classmethod
     def init_new(
         cls,
