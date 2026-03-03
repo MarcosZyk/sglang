@@ -103,12 +103,14 @@ class IntelAMXAttnBackend(AttentionBackend):
         self.auto_tune = int(os.getenv("AMX_KERNEL_AUTO_TUNE", 0)) == 1
         if model_runner.use_mla_backend:
             q_head_dim = model_runner.model_config.qk_nope_head_dim + model_runner.model_config.qk_rope_head_dim
+            kv_dim = model_runner.model_config.kv_lora_rank
         else:
             q_head_dim = model_runner.model_config.head_dim
+            kv_dim = model_runner.model_config.head_dim
         self.tuner = KernelAutoTuner(
             self.num_head,
             q_head_dim,
-            self.v_head_dim,
+            kv_dim,
             model_runner.use_mla_backend,
             self.core_number
         )
