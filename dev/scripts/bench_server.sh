@@ -1,5 +1,4 @@
 python3 -m sglang.bench_serving \
-    --model-path /sgl-workspace/models/DeepSeek-V2-Lite-Chat \
     --host "127.0.0.1" --port "30010" \
     --dataset-path ./ShareGPT_V3_unfiltered_cleaned_split.json \
     --dataset-name random \
