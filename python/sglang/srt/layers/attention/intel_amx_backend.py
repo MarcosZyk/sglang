@@ -55,10 +55,7 @@ class KernelAutoTuner:
             block_num = factor_pair[0]
             split_num = factor_pair[1]
 
-            block_size = math.ceil(self.q_head_num / block_num)
-            split_size = math.ceil(seq_len / split_num)
-
-            overhead = self.redundant_io_size(block_num, block_size, split_num, split_size)
+            overhead = self.redundant_io_size(block_num, self.q_head_num, split_num, seq_len)
             if minimal_overhead > overhead or minimal_overhead == -1:
                 minimal_overhead = overhead
                 index = i
@@ -66,11 +63,11 @@ class KernelAutoTuner:
         return self.factor_pair_list[index]
 
 
-    def redundant_io_size(self, block_num: int, block_size: int, split_num: int, split_size: int) -> int:
+    def redundant_io_size(self, block_num: int, head_num: int, split_num: int, seq_len: int) -> int:
         if self.is_mla:
-            return self.q_dim * block_size * split_num + self.kv_dim * split_size * block_num
+            return self.q_dim * head_num * split_num + self.kv_dim * seq_len * block_num
         else:
-            return self.q_dim * block_size * split_num + 2 * self.kv_dim * split_size * block_num
+            return self.q_dim * head_num * split_num + 2 * self.kv_dim * seq_len * block_num
 
 
 class IntelAMXAttnBackend(AttentionBackend):
