@@ -127,7 +127,7 @@ class IntelAMXAttnBackend(AttentionBackend):
             forward_batch.split_num = 8
             forward_batch.head_block_size = 6 if bs == 1 else (22 if bs > 16 else 11)
 
-        logger.info(
+        logger.debug(
             "Forward decode with cores=%s, split_num=%s, head_block_size=%s",
             self.core_number,
             forward_batch.split_num,
