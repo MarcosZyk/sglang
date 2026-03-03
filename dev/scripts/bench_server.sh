@@ -1,7 +1,16 @@
-python3 -m sglang.bench_one_batch_server \
+python3 -m sglang.bench_serving \
     --model-path /sgl-workspace/models/DeepSeek-V2-Lite-Chat \
-    --base-url http://127.0.0.1:30010 \
+    --host "127.0.0.1" --port "30010" \
     --dataset-path ./ShareGPT_V3_unfiltered_cleaned_split.json \
-    --batch-size 1 \
-    --input-len 4096 \
-    --output-len 256
+    --dataset-name random \
+    --request-rate inf \
+    --random-range-ratio 1.0 \
+    --max-concurrency 50 \
+    --flush-cache --tokenize-prompt --warmup-requests 1 \
+    --num-prompts 1 \
+    --random-input 4096 \
+    --random-output 256 \
+
+
+
+
