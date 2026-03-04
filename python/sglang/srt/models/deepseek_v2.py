@@ -2550,6 +2550,8 @@ class DeepseekV2ForCausalLM(nn.Module):
             input_ids, positions, forward_batch, input_embeds, pp_proxy_tensors
         )
 
+        torch.ops.sgl_kernel.export_timing()
+
         if self.pp_group.is_last_rank:
             return self.logits_processor(
                 input_ids, hidden_states, self.lm_head, forward_batch

@@ -1,6 +1,7 @@
 #include "common.h"
 #include "gemm.h"
 #include "vec.h"
+#include "mla_timing.h"
 
 namespace {
 
@@ -1068,6 +1069,8 @@ void decode_attention_mla_kernel_impl(
     alignas(64) float m_delta[BLOCK_H];
 
     for (int64_t i = begin; i < end; ++i) {
+      mla_timing::ScopedTimer task_timer(g_timing_ids.task_loop);
+
       const int64_t h_start = block_id * BLOCK_H;
       const int64_t h_end = std::min(block_id * BLOCK_H + BLOCK_H, num_heads);
       const int64_t h_size = h_end - h_start;
@@ -1098,6 +1101,8 @@ void decode_attention_mla_kernel_impl(
         int64_t n_size = std::min(BLOCK_N, kv_end - n);
         const int64_t padded_n_size = div_up(int(n_size), TILE_K) * TILE_K;
 
+        mla_timing::ScopedTimer t(g_timing_ids.pack);
+
         // get key and pack
         pack_vnni<scalar_t, index_t>(
             /*    dst0 */ Btmp0,
@@ -1111,6 +1116,7 @@ void decode_attention_mla_kernel_impl(
             /* ld_dst0 */ BLOCK_N,
             /* ld_dst1 */ head_size_v);
 
+        mla_timing::ScopedTimer t(g_timing_ids.qk_gemm);
         // calculate s_i <- Q @ K
         at::native::cpublas::brgemm(
             /* M     */ h_size,
@@ -1124,6 +1130,8 @@ void decode_attention_mla_kernel_impl(
             /* B     */ Btmp0,
             /* C     */ s_i);
 
+
+        mla_timing::ScopedTimer t(g_timing_ids.softmax_prep);
         const Vec scale_vec = Vec(scaling);
         for (int64_t h = 0; h < h_size; ++h) {
           // s_i <- s_i * scale
@@ -1161,6 +1169,7 @@ void decode_attention_mla_kernel_impl(
           copy_stub<scalar_t, BLOCK_N>(s_delta2 + h * BLOCK_N, s_delta + h * BLOCK_N);
         }
 
+        mla_timing::ScopedTimer t(g_timing_ids.sv_gemm);
         // calculate V' <- s_delta @ V + V'
         at::native::cpublas::brgemm(
             /* M     */ h_size,
@@ -1175,6 +1184,8 @@ void decode_attention_mla_kernel_impl(
             /* C     */ v_prime);
       }  // loop with KV blocks
 
+
+      mla_timing::ScopedTimer t(g_timing_ids.final_norm);
       // only update v' when kv_split_size > 0
       if (kv_end > kv_start) {
         for (int64_t h = 0; h < h_size; ++h) {
