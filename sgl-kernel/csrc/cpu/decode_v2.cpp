@@ -1,6 +1,7 @@
 #include "common.h"
 #include "gemm.h"
 #include "vec.h"
+#include "mla_timing.h"
 
 namespace {
 
