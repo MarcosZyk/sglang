@@ -281,6 +281,7 @@ struct TimingIds {
     int load_kv, pack, qk_gemm, softmax_prep, sv_gemm, final_norm, task_loop;
 
     TimingIds() {
+        load_kv = mla_timing::mla_timing_register_stage("load_kv");
         pack = mla_timing::mla_timing_register_stage("pack");
         qk_gemm = mla_timing::mla_timing_register_stage("qk_gemm");
         softmax_prep = mla_timing::mla_timing_register_stage("softmax_prep");
