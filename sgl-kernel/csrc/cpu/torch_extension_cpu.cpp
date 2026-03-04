@@ -309,10 +309,10 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
   m.impl("extend_attention_cpu", torch::kCPU, &extend_attention_cpu);
 
   m.def("enable_timing() -> ()");
-  m.impl("enable_timing()", torch::kCPU, &enable_timing);
+  m.impl("enable_timing", torch::kCPU, &enable_timing);
 
   m.def("export_timing() -> ()");
-  m.impl("export_timing()", torch::kCPU, &export_timing);
+  m.impl("export_timing", torch::kCPU, &export_timing);
 
   // weight prepack
   m.def("convert_weight_packed(Tensor weight) -> Tensor");
