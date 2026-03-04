@@ -300,6 +300,8 @@ void enable_timing(){
 void export_timing(){
     mla_timing::mla_timing_print();
     mla_timing::mla_timing_export(
-    "/sgl-workspace/sglang/dev/perf/" + std::chrono::high_resolution_clock::now().time_since_epoch().count() + "_result.csv"
+        std::string("/sgl-workspace/sglang/dev/perf/") +
+        std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count()) +
+        std::string("_result.csv")
     );
 }
