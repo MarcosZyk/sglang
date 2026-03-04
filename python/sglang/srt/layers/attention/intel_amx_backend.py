@@ -90,7 +90,7 @@ class IntelAMXAttnBackend(AttentionBackend):
         self.decode_attention_fwd = torch.ops.sgl_kernel.decode_attention_cpu_v2
         self.extend_attention_fwd = torch.ops.sgl_kernel.extend_attention_cpu
 
-        torch.ops.sgl_kernel.enable_timing()
+        torch.ops.sgl_kernel.enable_timing(torch.empty([]))
 
         cores = model_runner.local_omp_cpuid.split(",")
         core_number = 0
