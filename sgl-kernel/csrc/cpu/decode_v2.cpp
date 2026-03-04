@@ -1101,7 +1101,7 @@ void decode_attention_mla_kernel_impl(
         int64_t n_size = std::min(BLOCK_N, kv_end - n);
         const int64_t padded_n_size = div_up(int(n_size), TILE_K) * TILE_K;
 
-        mla_timing::ScopedTimer t(g_timing_ids.pack);
+        mla_timing::ScopedTimer pk(g_timing_ids.pack);
 
         // get key and pack
         pack_vnni<scalar_t, index_t>(
@@ -1116,7 +1116,7 @@ void decode_attention_mla_kernel_impl(
             /* ld_dst0 */ BLOCK_N,
             /* ld_dst1 */ head_size_v);
 
-        mla_timing::ScopedTimer t(g_timing_ids.qk_gemm);
+        mla_timing::ScopedTimer qk(g_timing_ids.qk_gemm);
         // calculate s_i <- Q @ K
         at::native::cpublas::brgemm(
             /* M     */ h_size,
@@ -1131,7 +1131,7 @@ void decode_attention_mla_kernel_impl(
             /* C     */ s_i);
 
 
-        mla_timing::ScopedTimer t(g_timing_ids.softmax_prep);
+        mla_timing::ScopedTimer sft(g_timing_ids.softmax_prep);
         const Vec scale_vec = Vec(scaling);
         for (int64_t h = 0; h < h_size; ++h) {
           // s_i <- s_i * scale
@@ -1169,7 +1169,7 @@ void decode_attention_mla_kernel_impl(
           copy_stub<scalar_t, BLOCK_N>(s_delta2 + h * BLOCK_N, s_delta + h * BLOCK_N);
         }
 
-        mla_timing::ScopedTimer t(g_timing_ids.sv_gemm);
+        mla_timing::ScopedTimer sv(g_timing_ids.sv_gemm);
         // calculate V' <- s_delta @ V + V'
         at::native::cpublas::brgemm(
             /* M     */ h_size,
@@ -1185,7 +1185,7 @@ void decode_attention_mla_kernel_impl(
       }  // loop with KV blocks
 
 
-      mla_timing::ScopedTimer t(g_timing_ids.final_norm);
+      mla_timing::ScopedTimer fn(g_timing_ids.final_norm);
       // only update v' when kv_split_size > 0
       if (kv_end > kv_start) {
         for (int64_t h = 0; h < h_size; ++h) {
