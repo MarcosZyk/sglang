@@ -97,6 +97,10 @@ void decode_attention_cpu_v2(
     double logit_cap,
     int64_t head_block_size);
 
+void enable_timing();
+
+void export_timing();
+
 void extend_attention_cpu(
     at::Tensor& q_extend,
     at::Tensor& k_extend,
