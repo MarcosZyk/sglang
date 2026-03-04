@@ -1,6 +1,6 @@
 // mla_timing.h
-#pragma once
 
+#include <fstream>
 #include <chrono>
 #include <vector>
 #include <string>
@@ -37,27 +37,7 @@ struct TimingBackend {
     void (*end)(int stage_id);
 };
 
-// 线程本地存储（无锁，每个线程独立）
-struct ThreadLocalStats {
-    std::vector<TickType> accum_ticks;  // 按 stage_id 索引累加 ticks
-    std::vector<TickType> start_ticks;  // 记录 start 时的 tick
-    bool is_registered = false;
-
-    ThreadLocalStats() {
-        // 注册到全局管理器（以便导出时能找到）
-        GlobalManager::instance().register_thread(this);
-    }
-    ~ThreadLocalStats() {
-        GlobalManager::instance().unregister_thread(this);
-    }
-
-    void ensure_size(int num_stages) {
-        if (accum_ticks.size() < num_stages) {
-            accum_ticks.resize(num_stages, 0);
-            start_ticks.resize(num_stages, 0);
-        }
-    }
-};
+struct ThreadLocalStats;
 
 // 声明 thread_local 实例
 thread_local ThreadLocalStats g_tls_stats;
@@ -323,6 +303,6 @@ void enable_timing(){
 void export_timing(){
     mla_timing::mla_timing_print();
     mla_timing::mla_timing_export(
-    "/sgl-workspace/sglang/dev/perf/" + Clock::now().time_since_epoch().count() + "_result.csv"
+    "/sgl-workspace/sglang/dev/perf/" + std::chrono::high_resolution_clock::now().time_since_epoch().count() + "_result.csv"
     );
 }
