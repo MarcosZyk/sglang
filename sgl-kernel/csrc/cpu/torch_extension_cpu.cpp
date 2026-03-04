@@ -19,7 +19,6 @@ limitations under the License.
 
 #include "sgl_kernel_ops.h"
 #include "shm.h"
-#include "mla_timing.h"
 
 // silu_and_mul
 at::Tensor silu_and_mul_cpu(at::Tensor& input);
@@ -97,6 +96,10 @@ void decode_attention_cpu_v2(
     double sm_scale,
     double logit_cap,
     int64_t head_block_size);
+
+void enable_timing(at::Tensor& placeholder);
+
+void export_timing(at::Tensor& placeholder);
 
 void extend_attention_cpu(
     at::Tensor& q_extend,
@@ -305,10 +308,10 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
       "extend_start_loc, int max_len_extend, float sm_scale, float logit_cap) -> ()");
   m.impl("extend_attention_cpu", torch::kCPU, &extend_attention_cpu);
 
-  m.def("enable_timing() -> ()");
+  m.def("enable_timing(Tensor placeholder) -> ()");
   m.impl("enable_timing", torch::kCPU, &enable_timing);
 
-  m.def("export_timing() -> ()");
+  m.def("export_timing(Tensor placeholder) -> ()");
   m.impl("export_timing", torch::kCPU, &export_timing);
 
   // weight prepack

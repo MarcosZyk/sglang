@@ -13,6 +13,8 @@
 #include <cstdint>
 #include <fstream>
 
+#include "common.h"
+
 namespace mla_timing {
 
 // ========== 1. 时钟配置 ==========
@@ -292,12 +294,12 @@ struct TimingIds {
 static const TimingIds g_timing_ids;
 
 
-void enable_timing(){
+void enable_timing(at::Tensor& placeholder){
     mla_timing::mla_timing_enable(true);
     mla_timing::mla_timing_reset();
 }
 
-void export_timing(){
+void export_timing(at::Tensor& placeholder){
     mla_timing::mla_timing_print();
     mla_timing::mla_timing_export(
         std::string("/sgl-workspace/sglang/dev/perf/") +
