@@ -278,7 +278,7 @@ private:
 
 // 在程序启动或 kernel 第一次调用前
 struct TimingIds {
-    int pack, qk_gemm, softmax_prep, sv_gemm, final_norm, task_loop;
+    int load_kv, pack, qk_gemm, softmax_prep, sv_gemm, final_norm, task_loop;
 
     TimingIds() {
         pack = mla_timing::mla_timing_register_stage("pack");

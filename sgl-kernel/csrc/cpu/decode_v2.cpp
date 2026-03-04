@@ -29,9 +29,13 @@ inline void pack_vnni_Nx32(
     bool convert_v) {
   __m512i vinputs[16];
   int n = 0;
-  for (; n < N; ++n) {
-    vinputs[n] = _mm512_loadu_si512(src + ind[n] * ld_src);
+  {
+    mla_timing::ScopedTimer load_timer(g_timing_ids.load_kv);
+    for (; n < N; ++n) {
+        vinputs[n] = _mm512_loadu_si512(src + ind[n] * ld_src);
+    }
   }
+
   // padding with zero to avoid uninitialized vectors
   for (; n < 16; ++n) {
     vinputs[n] = _mm512_set1_epi32(0);
