@@ -19,6 +19,7 @@ limitations under the License.
 
 #include "sgl_kernel_ops.h"
 #include "shm.h"
+#include "mla_timing.h"
 
 // silu_and_mul
 at::Tensor silu_and_mul_cpu(at::Tensor& input);
