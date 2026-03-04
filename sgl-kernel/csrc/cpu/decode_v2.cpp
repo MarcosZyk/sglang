@@ -1069,7 +1069,6 @@ void decode_attention_mla_kernel_impl(
     alignas(64) float m_delta[BLOCK_H];
 
     for (int64_t i = begin; i < end; ++i) {
-      mla_timing::ScopedTimer task_timer(g_timing_ids.task_loop);
 
       const int64_t h_start = block_id * BLOCK_H;
       const int64_t h_end = std::min(block_id * BLOCK_H + BLOCK_H, num_heads);
@@ -1086,6 +1085,9 @@ void decode_attention_mla_kernel_impl(
       const int64_t SPLIT_SIZE = div_up(seq_len_kv, num_kv_splits);
       const int64_t kv_start = kv_id * SPLIT_SIZE;
       const int64_t kv_end = std::min(kv_start + SPLIT_SIZE, seq_len_kv);
+
+      if (kv_end <= kv_start) continue;
+      mla_timing::ScopedTimer task_timer(g_timing_ids.task_loop);
 
       fill_stub(s_prime, 0.f, BLOCK_H);
       fill_stub(m_prime, -std::numeric_limits<float>::infinity(), BLOCK_H);
