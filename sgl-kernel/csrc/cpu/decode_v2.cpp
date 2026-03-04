@@ -1087,119 +1087,129 @@ void decode_attention_mla_kernel_impl(
       const int64_t kv_end = std::min(kv_start + SPLIT_SIZE, seq_len_kv);
 
       if (kv_end <= kv_start) continue;
-      mla_timing::ScopedTimer task_timer(g_timing_ids.task_loop);
+      {
+          mla_timing::ScopedTimer task_timer(g_timing_ids.task_loop);
 
-      fill_stub(s_prime, 0.f, BLOCK_H);
-      fill_stub(m_prime, -std::numeric_limits<float>::infinity(), BLOCK_H);
+          fill_stub(s_prime, 0.f, BLOCK_H);
+          fill_stub(m_prime, -std::numeric_limits<float>::infinity(), BLOCK_H);
 
-      // get v_prime, and init to zero
-      float* __restrict__ v_prime = attn_logits + bs * l_stride0 + h_start * l_stride1 + kv_id * l_stride2;
-      for (int64_t h = 0; h < h_size; ++h) {
-        fill_stub(v_prime + h * l_stride1, 0.f, head_size_v);
+          // get v_prime, and init to zero
+          float* __restrict__ v_prime = attn_logits + bs * l_stride0 + h_start * l_stride1 + kv_id * l_stride2;
+          for (int64_t h = 0; h < h_size; ++h) {
+            fill_stub(v_prime + h * l_stride1, 0.f, head_size_v);
+          }
+
+          // loop over K and V sequence with BLOCK_N
+          for (int64_t n = kv_start; n < kv_end; n += BLOCK_N) {
+            int64_t n_size = std::min(BLOCK_N, kv_end - n);
+            const int64_t padded_n_size = div_up(int(n_size), TILE_K) * TILE_K;
+
+            {
+                mla_timing::ScopedTimer pk(g_timing_ids.pack);
+                // get key and pack
+                pack_vnni<scalar_t, index_t>(
+                    /*    dst0 */ Btmp0,
+                    /*    dst1 */ Btmp1,
+                    /*     src */ k_buffer + /* head_kv_id */ 0 * k_strideH,
+                    /*     ind */ req_to_token + req_pool_id * max_context_len + n,
+                    /*       N */ n_size,
+                    /*       K */ head_size,
+                    /*      Kv */ head_size_v,
+                    /*  ld_src */ k_strideN,
+                    /* ld_dst0 */ BLOCK_N,
+                    /* ld_dst1 */ head_size_v);
+            }
+
+            {
+                mla_timing::ScopedTimer qk(g_timing_ids.qk_gemm);
+                // calculate s_i <- Q @ K
+                at::native::cpublas::brgemm(
+                    /* M     */ h_size,
+                    /* N     */ n_size,
+                    /* K     */ head_size,
+                    /* lda   */ q_strideH,
+                    /* ldb   */ BLOCK_N,
+                    /* ldc   */ BLOCK_N,
+                    /* add_C */ false,
+                    /* A     */ q_ptr,
+                    /* B     */ Btmp0,
+                    /* C     */ s_i);
+            }
+
+            {
+                mla_timing::ScopedTimer sft(g_timing_ids.softmax_prep);
+                const Vec scale_vec = Vec(scaling);
+                for (int64_t h = 0; h < h_size; ++h) {
+                  // s_i <- s_i * scale
+                  at::vec::map<float>(
+                      [scale_vec](Vec x) { return x * scale_vec; }, s_i + h * BLOCK_N, s_i + h * BLOCK_N, n_size);
+
+                  // m_i: max value per row
+                  float m_i = at::vec::reduce_all<float>(
+                      [](Vec& x, Vec& y) { return at::vec::maximum(x, y); }, s_i + h * BLOCK_N, n_size);
+                  m_i = std::max(m_i, m_prime[h]);
+
+                  // m_delta <- exp(m' - m_i)
+                  m_delta[h] = std::exp(m_prime[h] - m_i);
+
+                  // s_delta <- exp(s_i - m_i)
+                  at::vec::map<float>(
+                      [m_i](Vec x) { return (x - Vec(m_i)).exp_u20(); }, s_delta + h * BLOCK_N, s_i + h * BLOCK_N, n_size);
+
+                  // s' <- s' * m_delta + sum(s_delta)
+                  s_prime[h] *= m_delta[h];
+                  s_prime[h] += at::vec::reduce_all<float>([](Vec& x, Vec& y) { return x + y; }, s_delta + h * BLOCK_N, n_size);
+
+                  m_prime[h] = m_i;
+
+                  // v' <- v' * m_delta
+                  float scale_m = m_delta[h];
+                  at::vec::map<float>(
+                      [scale_m](Vec x) { return x * Vec(scale_m); },
+                      v_prime + h * l_stride1,
+                      v_prime + h * l_stride1,
+                      head_size_v);
+
+                  // pad s_delta with 0 first and then convert to scalar_t
+                  fill_stub(s_delta + h * BLOCK_N + n_size, 0.f, padded_n_size - n_size);
+                  copy_stub<scalar_t, BLOCK_N>(s_delta2 + h * BLOCK_N, s_delta + h * BLOCK_N);
+                }
+            }
+
+            {
+               mla_timing::ScopedTimer sv(g_timing_ids.sv_gemm);
+                // calculate V' <- s_delta @ V + V'
+                at::native::cpublas::brgemm(
+                    /* M     */ h_size,
+                    /* N     */ head_size_v,
+                    /* K     */ padded_n_size,  // n_size
+                    /* lda   */ BLOCK_N,
+                    /* ldb   */ head_size_v,
+                    /* ldc   */ l_stride1,
+                    /* add_C */ true,
+                    /* A     */ s_delta2,
+                    /* B     */ Btmp1,
+                    /* C     */ v_prime);
+            }
+          }  // loop with KV blocks
+
+          {
+              mla_timing::ScopedTimer fn(g_timing_ids.final_norm);
+              // only update v' when kv_split_size > 0
+              if (kv_end > kv_start) {
+                for (int64_t h = 0; h < h_size; ++h) {
+                  float s = 1 / s_prime[h];
+                  at::vec::map<float>(
+                      [s](Vec out) { return out * Vec(s); }, v_prime + h * l_stride1, v_prime + h * l_stride1, head_size_v);
+                  (v_prime + h * l_stride1)[head_size_v] = m_prime[h] + std::log(s_prime[h]);
+                }
+              }
+          }
+
+          // move to the next index
+          data_index_step(bs, batches, block_id, num_blocks, kv_id, num_kv_splits);
       }
 
-      // loop over K and V sequence with BLOCK_N
-      for (int64_t n = kv_start; n < kv_end; n += BLOCK_N) {
-        int64_t n_size = std::min(BLOCK_N, kv_end - n);
-        const int64_t padded_n_size = div_up(int(n_size), TILE_K) * TILE_K;
-
-        mla_timing::ScopedTimer pk(g_timing_ids.pack);
-
-        // get key and pack
-        pack_vnni<scalar_t, index_t>(
-            /*    dst0 */ Btmp0,
-            /*    dst1 */ Btmp1,
-            /*     src */ k_buffer + /* head_kv_id */ 0 * k_strideH,
-            /*     ind */ req_to_token + req_pool_id * max_context_len + n,
-            /*       N */ n_size,
-            /*       K */ head_size,
-            /*      Kv */ head_size_v,
-            /*  ld_src */ k_strideN,
-            /* ld_dst0 */ BLOCK_N,
-            /* ld_dst1 */ head_size_v);
-
-        mla_timing::ScopedTimer qk(g_timing_ids.qk_gemm);
-        // calculate s_i <- Q @ K
-        at::native::cpublas::brgemm(
-            /* M     */ h_size,
-            /* N     */ n_size,
-            /* K     */ head_size,
-            /* lda   */ q_strideH,
-            /* ldb   */ BLOCK_N,
-            /* ldc   */ BLOCK_N,
-            /* add_C */ false,
-            /* A     */ q_ptr,
-            /* B     */ Btmp0,
-            /* C     */ s_i);
-
-
-        mla_timing::ScopedTimer sft(g_timing_ids.softmax_prep);
-        const Vec scale_vec = Vec(scaling);
-        for (int64_t h = 0; h < h_size; ++h) {
-          // s_i <- s_i * scale
-          at::vec::map<float>(
-              [scale_vec](Vec x) { return x * scale_vec; }, s_i + h * BLOCK_N, s_i + h * BLOCK_N, n_size);
-
-          // m_i: max value per row
-          float m_i = at::vec::reduce_all<float>(
-              [](Vec& x, Vec& y) { return at::vec::maximum(x, y); }, s_i + h * BLOCK_N, n_size);
-          m_i = std::max(m_i, m_prime[h]);
-
-          // m_delta <- exp(m' - m_i)
-          m_delta[h] = std::exp(m_prime[h] - m_i);
-
-          // s_delta <- exp(s_i - m_i)
-          at::vec::map<float>(
-              [m_i](Vec x) { return (x - Vec(m_i)).exp_u20(); }, s_delta + h * BLOCK_N, s_i + h * BLOCK_N, n_size);
-
-          // s' <- s' * m_delta + sum(s_delta)
-          s_prime[h] *= m_delta[h];
-          s_prime[h] += at::vec::reduce_all<float>([](Vec& x, Vec& y) { return x + y; }, s_delta + h * BLOCK_N, n_size);
-
-          m_prime[h] = m_i;
-
-          // v' <- v' * m_delta
-          float scale_m = m_delta[h];
-          at::vec::map<float>(
-              [scale_m](Vec x) { return x * Vec(scale_m); },
-              v_prime + h * l_stride1,
-              v_prime + h * l_stride1,
-              head_size_v);
-
-          // pad s_delta with 0 first and then convert to scalar_t
-          fill_stub(s_delta + h * BLOCK_N + n_size, 0.f, padded_n_size - n_size);
-          copy_stub<scalar_t, BLOCK_N>(s_delta2 + h * BLOCK_N, s_delta + h * BLOCK_N);
-        }
-
-        mla_timing::ScopedTimer sv(g_timing_ids.sv_gemm);
-        // calculate V' <- s_delta @ V + V'
-        at::native::cpublas::brgemm(
-            /* M     */ h_size,
-            /* N     */ head_size_v,
-            /* K     */ padded_n_size,  // n_size
-            /* lda   */ BLOCK_N,
-            /* ldb   */ head_size_v,
-            /* ldc   */ l_stride1,
-            /* add_C */ true,
-            /* A     */ s_delta2,
-            /* B     */ Btmp1,
-            /* C     */ v_prime);
-      }  // loop with KV blocks
-
-
-      mla_timing::ScopedTimer fn(g_timing_ids.final_norm);
-      // only update v' when kv_split_size > 0
-      if (kv_end > kv_start) {
-        for (int64_t h = 0; h < h_size; ++h) {
-          float s = 1 / s_prime[h];
-          at::vec::map<float>(
-              [s](Vec out) { return out * Vec(s); }, v_prime + h * l_stride1, v_prime + h * l_stride1, head_size_v);
-          (v_prime + h * l_stride1)[head_size_v] = m_prime[h] + std::log(s_prime[h]);
-        }
-      }
-
-      // move to the next index
-      data_index_step(bs, batches, block_id, num_blocks, kv_id, num_kv_splits);
     }
     at::native::cpublas::brgemm_release();
   });
