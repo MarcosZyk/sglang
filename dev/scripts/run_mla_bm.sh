@@ -1,4 +1,6 @@
-export OMP_SCHEDULE=STATIC python bm_mla.py \
+export OMP_SCHEDULE=STATIC
+
+python bm_mla.py \
     --seq-len 4096 \
     --head-num 32 \
     --head-block-size 6 \
