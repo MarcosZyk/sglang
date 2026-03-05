@@ -1,3 +1,5 @@
+import os
+
 import torch
 import time
 import argparse
@@ -41,7 +43,7 @@ def bm_mla(seq_len: int, head_num: int, head_block_size: int, split_num: int, ) 
         )
         param_list.append((q, k_buffer, v_buffer, o, key, value, attn_logits))
 
-    start_time = time.time()
+    start_time = time.perf_counter()
     for param in param_list:
         q, k_buffer, v_buffer, o, key, value, attn_logits = param
         torch.ops.sgl_kernel.decode_attention_cpu_v2(
@@ -60,7 +62,7 @@ def bm_mla(seq_len: int, head_num: int, head_block_size: int, split_num: int, ) 
             logit_cap,
             head_block_size,
         )
-    end_time = time.time()
+    end_time = time.perf_counter()
     duration = end_time - start_time
 
     print(f"Finish decoding {round} rounds in {duration * 1000} ms.", flush=True)
@@ -71,11 +73,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     # 添加参数
-    parser.add_argument('--seq-len', '-l', type=int, default=1024, )
-    parser.add_argument('--head-num', '-q', type=int, default=128, )
+    parser.add_argument('--seq-len', '-l', type=int, default=4096, )
+    parser.add_argument('--head-num', '-q', type=int, default=32, )
     parser.add_argument('--head-block-size', '-b', type=int, default=6, )
     parser.add_argument('--split-num', '-s', type=int, default=8, )
-    parser.add_argument('--bind-numa', '-c', type=str, default="0-59", )
+    parser.add_argument('--bind-numa', '-c', type=str, default="80-119", )
 
     # 解析参数
     args = parser.parse_args()
@@ -85,4 +87,6 @@ if __name__ == "__main__":
     split_num = args.split_num
 
     torch.ops.sgl_kernel.init_cpu_threads_env(args.bind_numa)
+    torch.ops.sgl_kernel.enable_timing(torch.empty([]))
     bm_mla(seq_len, head_num, head_block_size, split_num)
+    torch.ops.sgl_kernel.export_timing(torch.empty([]))
