@@ -278,7 +278,8 @@ private:
 
 // 在程序启动或 kernel 第一次调用前
 struct TimingIds {
-    int load_kv, pack, qk_gemm, softmax_prep, sv_gemm, final_norm, task_loop, kernel_total;
+    int load_kv, pack, qk_gemm, softmax_prep, sv_gemm, final_norm, task_loop, task_total, thread_total;
+    int accum_o, kernel_total;
 
     TimingIds() {
         load_kv = mla_timing::mla_timing_register_stage("load_kv");
@@ -288,6 +289,9 @@ struct TimingIds {
         sv_gemm = mla_timing::mla_timing_register_stage("sv_gemm");
         final_norm = mla_timing::mla_timing_register_stage("final_norm");
         task_loop = mla_timing::mla_timing_register_stage("task_loop");
+        task_total = mla_timing::mla_timing_register_stage("task_total");
+        thread_total = mla_timing::mla_timing_register_stage("thread_total");
+        accum_o = mla_timing::mla_timing_register_stage("accum_o");
         kernel_total = mla_timing::mla_timing_register_stage("kernel_total");
     }
 };

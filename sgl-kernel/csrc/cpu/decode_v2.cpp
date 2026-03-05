@@ -1056,6 +1056,7 @@ void decode_attention_mla_kernel_impl(
 
   // parallel on [batches, num_blocks, num_kv_splits]
   at::parallel_for(0, batches * num_blocks * num_kv_splits, 0, [&](int64_t begin, int64_t end) {
+    mla_timing::ScopedTimer task_timer(g_timing_ids.thread_total);
     int64_t bs{0}, block_id{0}, kv_id{0};
     data_index_init(begin, bs, batches, block_id, num_blocks, kv_id, num_kv_splits);
 
@@ -1076,6 +1077,7 @@ void decode_attention_mla_kernel_impl(
     alignas(64) float m_delta[BLOCK_H];
 
     for (int64_t i = begin; i < end; ++i) {
+      mla_timing::ScopedTimer task_timer(g_timing_ids.task_total);
 
       const int64_t h_start = block_id * BLOCK_H;
       const int64_t h_end = std::min(block_id * BLOCK_H + BLOCK_H, num_heads);
@@ -1221,8 +1223,11 @@ void decode_attention_mla_kernel_impl(
     at::native::cpublas::brgemm_release();
   });
 
-  decode_accumulate_kv_splits(
+  {
+    mla_timing::ScopedTimer task_timer(g_timing_ids.thread_total);
+    decode_accumulate_kv_splits(
       output, attn_logits, batches, num_heads, head_size_v, num_kv_splits, l_stride1, l_stride2);
+  }
 }  // MLA
 
 template <typename scalar_t, typename index_t, int64_t BLOCK_N>
