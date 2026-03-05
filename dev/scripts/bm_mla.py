@@ -4,8 +4,6 @@ import torch
 import time
 import argparse
 
-from mlx.core import bfloat16
-
 import sgl_kernel
 
 torch.manual_seed(1234)
