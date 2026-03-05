@@ -96,5 +96,6 @@ if __name__ == "__main__":
         print(f"Finish Warmup")
 
         torch.ops.sgl_kernel.enable_timing(torch.empty([]))
-        bm_mla(seq_len, head_num, head_block_size, split_num)
+        for i in range(256):
+            bm_mla(seq_len, head_num, head_block_size, split_num)
         torch.ops.sgl_kernel.export_timing(torch.empty([]))
