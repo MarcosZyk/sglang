@@ -1035,6 +1035,9 @@ void decode_attention_mla_kernel_impl(
     int64_t max_total_num_tokens,
     int64_t buffer_size_per_thread,
     int64_t head_block_size) {
+
+  mla_timing::ScopedTimer task_timer(g_timing_ids.kernel_total);
+
   using Vec = at::vec::Vectorized<float>;
 
   // block length for heads
