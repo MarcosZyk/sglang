@@ -14,7 +14,7 @@ def bm_mla(seq_len: int, head_num: int, head_block_size: int, split_num: int, ) 
     D = 576
     D_V = 512
 
-    dtype = torch.bfloat16
+    dtype = torch.int8
 
     total_tokens = B * seq_len
     sm_scale = (128 + 64)**-0.5
@@ -31,11 +31,11 @@ def bm_mla(seq_len: int, head_num: int, head_block_size: int, split_num: int, ) 
     round = 61
     param_list = []
     for _ in range(round):
-        q = torch.randn(B, H_Q, D, dtype=dtype)
+        q = torch.randint(-127, 127, [B, H_Q, D], dtype=dtype)
         k_buffer = torch.randn(total_tokens, H_KV, D, dtype=dtype)
         v_buffer = k_buffer.narrow(2, 0, D_V)
         o = torch.zeros(B, H_Q, D_V, dtype=dtype)
-        key = torch.randn(B, H_KV, D, dtype=dtype)
+        key = torch.randint(-127, 127, [B, H_KV, D], dtype=dtype)
         value = key.narrow(2, 0, D_V)
         attn_logits = torch.empty(
             (B, H_Q, split_num, D_V + 1),
