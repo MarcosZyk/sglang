@@ -89,6 +89,12 @@ if __name__ == "__main__":
 
     with torch.inference_mode():
         torch.ops.sgl_kernel.init_cpu_threads_env(args.bind_numa)
+
+        # warm up
+        print(f"Start Warmup")
+        bm_mla(seq_len, head_num, head_block_size, split_num)
+        print(f"Finish Warmup")
+
         torch.ops.sgl_kernel.enable_timing(torch.empty([]))
         bm_mla(seq_len, head_num, head_block_size, split_num)
         torch.ops.sgl_kernel.export_timing(torch.empty([]))
