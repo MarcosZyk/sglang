@@ -33,7 +33,7 @@ def bm_mla(seq_len: int, head_num: int, head_block_size: int, split_num: int, ) 
     param_list = []
     for _ in range(round):
         q = torch.randn(B, H_Q, D, dtype=dtype)
-        k_buffer = torch.n(total_tokens, H_KV, D, dtype=dtype)
+        k_buffer = torch.randn(total_tokens, H_KV, D, dtype=dtype)
         v_buffer = k_buffer.narrow(2, 0, D_V)
         o = torch.zeros(B, H_Q, D_V, dtype=dtype)
         key = torch.randn(B, H_KV, D, dtype=dtype)
