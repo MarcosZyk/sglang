@@ -1552,7 +1552,7 @@ void decode_attention_cpu_v2(
             max_total_num_tokens);
       } else if (is_mla) {
         // MLA
-        decode_attention_mla_kernel_impl<scalar_t, index_t, BLOCK_N>(
+        decode_attention_mla_kernel_impl<scalar_t, index_t, 512>(
             output.data_ptr<scalar_t>(),
             attn_logits.data_ptr<float>(),
             query.data_ptr<scalar_t>(),
