@@ -34,7 +34,7 @@ def bm_mla(seq_len: int, head_num: int, head_block_size: int, split_num: int, ) 
         q = torch.randn(B, H_Q, D, dtype=torch.bfloat16)
         k_buffer = torch.randint(-127, 127, [total_tokens, H_KV, D], dtype=dtype)
         v_buffer = k_buffer.narrow(2, 0, D_V)
-        o = torch.zeros(B, H_Q, D_V, dtype=dtype)
+        o = torch.zeros(B, H_Q, D_V, dtype=torch.bfloat16)
         key = torch.randint(-127, 127, [B, H_KV, D], dtype=dtype)
         value = key.narrow(2, 0, D_V)
         attn_logits = torch.empty(
