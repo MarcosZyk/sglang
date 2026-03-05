@@ -1224,7 +1224,7 @@ void decode_attention_mla_kernel_impl(
   });
 
   {
-    mla_timing::ScopedTimer task_timer(g_timing_ids.thread_total);
+    mla_timing::ScopedTimer task_timer(g_timing_ids.accum_o);
     decode_accumulate_kv_splits(
       output, attn_logits, batches, num_heads, head_size_v, num_kv_splits, l_stride1, l_stride2);
   }
