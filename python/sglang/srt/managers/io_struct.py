@@ -122,6 +122,8 @@ class GenerateReqInput:
 
     # For data parallel rank routing
     data_parallel_rank: Optional[int] = None
+    agent_id: Optional[str] = None
+    task_id: Optional[int] = None
 
     def contains_mm_input(self) -> bool:
         return (
@@ -524,6 +526,8 @@ class TokenizedGenerateReqInput:
 
     # For data parallel rank routing
     data_parallel_rank: Optional[int] = None
+    agent_id: Optional[str] = None
+    task_id: Optional[int] = None
 
 
 @dataclass

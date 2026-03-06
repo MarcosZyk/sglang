@@ -1153,6 +1153,8 @@ class Scheduler(
                 bootstrap_port=recv_req.bootstrap_port,
                 bootstrap_room=recv_req.bootstrap_room,
                 data_parallel_rank=recv_req.data_parallel_rank,
+                agent_id=recv_req.agent_id,
+                task_id=recv_req.task_id
             )
             req.tokenizer = self.tokenizer
 

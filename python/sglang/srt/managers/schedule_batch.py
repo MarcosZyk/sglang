@@ -434,6 +434,8 @@ class Req:
         bootstrap_port: Optional[int] = None,
         bootstrap_room: Optional[int] = None,
         data_parallel_rank: Optional[int] = None,
+        agent_id: Optional[str] = None,
+        task_id: Optional[int] = None 
     ):
         # Input and output info
         self.rid = rid
@@ -622,6 +624,9 @@ class Req:
         self.decode_time: List[float] = []
 
         self.push_to_model_runner_time: Optional[Deque[float]] = deque()
+
+        self.agent_id = agent_id
+        self.task_id = task_id
 
     @property
     def seqlen(self):
