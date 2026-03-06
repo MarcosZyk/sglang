@@ -25,7 +25,9 @@ def chat_completion(messages: List[Dict[str, str]],
             model=model,
             messages=messages,
             max_tokens=max_tokens,
-            temperature=temperature
+            temperature=temperature,
+            agent_id="abcdefg",
+            task_id=0
         )
         num_decode_tokens = resp.usage.completion_tokens
         num_prefill_tokens = resp.usage.prompt_tokens

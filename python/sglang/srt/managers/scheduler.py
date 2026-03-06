@@ -1156,6 +1156,7 @@ class Scheduler(
                 agent_id=recv_req.agent_id,
                 task_id=recv_req.task_id
             )
+            logger.info(f'Req info: agent_id {req.agent_id}, task_id {req.task_id}')
             req.tokenizer = self.tokenizer
 
             if self.disaggregation_mode != DisaggregationMode.NULL:
