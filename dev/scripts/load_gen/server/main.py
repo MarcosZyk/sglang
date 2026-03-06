@@ -258,7 +258,9 @@ def simulate_sync(req_dict: Dict) -> Dict:
                 top_logprobs=1,
                 extra_body={
                     "ignore_eos": True  # 将参数放在这里
-                }
+                },
+                agent_id=rid,
+                task_id=task_type,
             )
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"OpenAI API call failed: {e}")
