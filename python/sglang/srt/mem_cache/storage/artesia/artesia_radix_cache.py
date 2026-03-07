@@ -151,7 +151,12 @@ class ArtesiaRadixCache(RadixCache):
         start_retrieve = time.perf_counter()
 
         context = ContextDescription(token_ids=key, offset=value.numel())
-        semantics = SemanticDescription(tag_list=[])
+        tag_list = []
+        if "agent_id" in kwargs:
+            tag_list.append(("agent_id", kwargs["agent_id"]))
+        if "task_id" in kwargs:
+            tag_list.append(("task_id", kwargs["task_id"]))
+        semantics = SemanticDescription(tag_list=tag_list)
         num_retrieved = self.artesia_connector.load_kv(
             context=context,
             semantics=semantics,
@@ -215,7 +220,10 @@ class ArtesiaRadixCache(RadixCache):
         torch.cuda.synchronize()
         start_store = time.perf_counter()
         context = ContextDescription(token_ids=token_ids, offset=0)
-        semantics = SemanticDescription(tag_list=[])
+        tag_list = []
+        tag_list.append(("agent_id", req.agent_id))
+        tag_list.append(("task_id", req.task_id))
+        semantics = SemanticDescription(tag_list=tag_list)
         self.artesia_connector.offload_kv(
             context=context,
             semantics=semantics,

@@ -435,7 +435,7 @@ class Req:
         bootstrap_room: Optional[int] = None,
         data_parallel_rank: Optional[int] = None,
         agent_id: Optional[str] = None,
-        task_id: Optional[int] = None 
+        task_id: Optional[int] = None
     ):
         # Input and output info
         self.rid = rid
@@ -657,6 +657,8 @@ class Req:
                 self.num_global_cache
             ) = tree_cache.match_prefix(
                 key=self.adjust_max_prefix_ids(),
+                agent_id=self.agent_id,
+                task_id=self.task_id,
             )
         self.extend_input_len = len(self.fill_ids) - len(self.prefix_indices)
 
