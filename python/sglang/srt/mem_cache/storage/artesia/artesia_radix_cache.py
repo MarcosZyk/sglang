@@ -66,6 +66,7 @@ class RadixTreeLog:
             self.buffer = []
             self.log_file.flush()
             os.fsync(self.log_file.fileno())
+            self.last_ops_time = time.time()
 
 
 class ArtesiaRadixCache(RadixCache):
