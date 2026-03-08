@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from typing import TYPE_CHECKING, List, Optional
 import time
@@ -29,6 +30,43 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+class RadixTreeLog:
+
+    def __init__(self):
+        self.dir_path = "./sgl_tree_log"
+        if os.path.exists(self.dir_path):
+            os.makedirs(self.dir_path, exist_ok=True)
+
+        self.file_path = os.path.join(self.dir_path, f"radix_tree-{time.time()}.log")
+        self.log_file = open(self.file_path, "w", encoding="utf-8",)
+        self.buffer = []
+        self.buffer_capacity = 128
+        self.last_ops_time = time.time()
+
+    def log_store(self, node: TreeNode):
+        if node.parent is None:
+            parent_id = None
+        else:
+            parent_id = node.parent.id
+        line = f"{time.time()},insert,{node.id},{parent_id},{node.key}"
+        self._add_log(line)
+
+    def log_remove(self, node: TreeNode):
+        if node.parent is None:
+            parent_id = None
+        else:
+            parent_id = node.parent.id
+        line = f"{time.time()},remove,{node.id},{parent_id},,"
+        self._add_log(line)
+
+    def _add_log(self, line: str):
+        self.buffer.append(line)
+        if len(self.buffer) >= self.buffer_capacity or time.time() - self.last_ops_time > 1:
+            self.log_file.writelines(self.buffer)
+            self.buffer = []
+            self.log_file.flush()
+            os.fsync(self.log_file.fileno())
+
 
 class ArtesiaRadixCache(RadixCache):
     """RadixCache + LMCache IO.
@@ -53,6 +91,7 @@ class ArtesiaRadixCache(RadixCache):
         tp_size: int = 1,
         rank: int = 0,
         tp_group: Optional[torch.distributed.ProcessGroup] = None,
+        enable_tree_log: bool = False,
     ):
         super().__init__(
             req_to_token_pool=req_to_token_pool,
@@ -61,6 +100,11 @@ class ArtesiaRadixCache(RadixCache):
             disable=disable,
             enable_kv_cache_events=enable_kv_cache_events,
         )
+        self.enable_tree_log = enable_tree_log
+        if self.enable_tree_log:
+            self.tree_log = RadixTreeLog()
+        else:
+            self.tree_log = None
 
         # Currently, we only support MHATokenToKVPool, which supports model using MHA/GQA/MQA
         kvcache = self.token_to_kv_pool_allocator.get_kvcache()
@@ -234,6 +278,19 @@ class ArtesiaRadixCache(RadixCache):
 
         logger.info(f'Offload time is {end_store - start_store}s')
         super().cache_finished_req(req)
+
+
+    def _record_store_event(self, node: TreeNode):
+        super()._record_store_event(node)
+        if not self.enable_tree_log:
+            return
+        self.tree_log.log_store(node)
+
+    def _record_remove_event(self, node: TreeNode):
+        super()._record_remove_event(node)
+        if not self.enable_tree_log:
+            return
+        self.tree_log.log_remove(node)
 
     def pretty_print(self):  # type: ignore[override]
         super().pretty_print()

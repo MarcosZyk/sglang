@@ -196,6 +196,7 @@ class ServerArgs:
     hicache_storage_backend: Optional[str] = None
     # Artesia
     enable_artesia: bool = False
+    enable_tree_log: bool = False
 
     # Double Sparsity
     enable_double_sparsity: bool = False
@@ -1437,6 +1438,11 @@ class ServerArgs:
             "--enable-artesia",
             action="store_true",
             help="Using Artesia as an alternative hierarchical cache solution",
+        )
+        parser.add_argument(
+            "--enable-tree-log",
+            action="store_true",
+            help="Store radix-tree modifications into logs for offline analysis.",
         )
 
         # Double Sparsity

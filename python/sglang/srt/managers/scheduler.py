@@ -634,6 +634,7 @@ class Scheduler(
                     tp_size=self.tp_size,
                     rank=self.tp_rank,
                     tp_group=self.tp_group,
+                    enable_tree_log=server_args.enable_tree_log,
                 )
             elif self.is_hybrid:
                 assert (
@@ -841,7 +842,7 @@ class Scheduler(
             recv_reqs = self.recv_requests()
 
             self.process_input_requests(recv_reqs)
-            
+
             torch.cuda.synchronize()
             self.start_exe_time = time.perf_counter()
             batch = self.get_next_batch_to_run()
@@ -1898,8 +1899,8 @@ class Scheduler(
         if self.forward_sleep_time is not None:
             logger.info(f"Scheduler.run_batch sleep {self.forward_sleep_time}s")
             time.sleep(self.forward_sleep_time)
-        
-        
+
+
 
         # Run forward
         if self.is_generation:
@@ -1969,7 +1970,7 @@ class Scheduler(
                 embeddings=embeddings, bid=model_worker_batch.bid
             )
 
-        
+
         return ret
 
     def process_batch_result(
