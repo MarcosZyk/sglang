@@ -34,7 +34,7 @@ class RadixTreeLog:
 
     def __init__(self):
         self.dir_path = "./sgl_tree_log"
-        if os.path.exists(self.dir_path):
+        if not os.path.exists(self.dir_path):
             os.makedirs(self.dir_path, exist_ok=True)
 
         self.file_path = os.path.join(self.dir_path, f"radix_tree-{time.time()}.log")
