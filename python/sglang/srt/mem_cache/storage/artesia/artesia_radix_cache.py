@@ -48,7 +48,7 @@ class RadixTreeLog:
             parent_id = None
         else:
             parent_id = node.parent.id
-        line = f"{time.time()},insert,{node.id},{parent_id},{node.key}"
+        line = f"{time.time()},insert,{node.id},{parent_id},{node.key}\n"
         self._add_log(line)
 
     def log_remove(self, node: TreeNode):
@@ -56,7 +56,7 @@ class RadixTreeLog:
             parent_id = None
         else:
             parent_id = node.parent.id
-        line = f"{time.time()},remove,{node.id},{parent_id},,"
+        line = f"{time.time()},remove,{node.id},{parent_id},\n"
         self._add_log(line)
 
     def _add_log(self, line: str):
