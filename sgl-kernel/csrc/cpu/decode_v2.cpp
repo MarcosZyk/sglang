@@ -825,56 +825,6 @@ void decode_accumulate_kv_splits(
     int64_t l_stride2) {
   using Vec = at::vec::Vectorized<float>;
 
-  const int64_t num_chunks = 80 / num_heads;
-  const int64_t chunk_size = div_up(num_kv_splits, num_chunks);
-
-  {
-  mla_timing::ScopedTimer task_timer(g_timing_ids.cal_chunk);
-  // parallel on [batches, num_heads]
-  at::parallel_for(0, batches * num_heads * num_chunks, 0, [&](int64_t begin, int64_t end) {
-    mla_timing::ScopedTimer task_timer(g_timing_ids.chunk_loop);
-    // NB: here we use logits[b][h][0] as acc, since
-    // for the first kv split (kv_id == 0):
-    //   m_delta = std::exp(-inf) = 0
-    //   e_logic = std::exp(0) = 1
-    //   acc = acc * m_delta + tv * e_logic = tv
-    for (int64_t i = begin; i < end; ++i) {
-      const int64_t head_id = i / num_chunks;
-      const int64_t chunk_id = i % num_chunks;
-      const int64_t chunk_start = chunk_id * chunk_size;
-      const int64_t chunk_end = std::min(chunk_start + chunk_size, num_kv_splits);
-
-      float* __restrict__ acc = attn_logits + head_id * l_stride1 + chunk_start * l_stride2;
-
-      float s_prime = 0.f;
-      float m_prime = -std::numeric_limits<scalar_t>::infinity();
-
-      // update acc with from each kv_split
-      for (int64_t kv_id = chunk_start; kv_id < chunk_end; ++kv_id) {
-        float* __restrict__ tv = acc + (kv_id - chunk_start) * l_stride2;
-        const float tlogic = (acc + (kv_id - chunk_start) * l_stride2)[head_size_v];
-
-        float m_i = std::max(tlogic, m_prime);
-        float m_delta = std::exp(m_prime - m_i);
-        float e_logic = std::exp(tlogic - m_i);
-        if (kv_id != chunk_start) {
-          at::vec::map2<float>(
-              [m_delta, e_logic](Vec x, Vec y) { return x * Vec(m_delta) + y * Vec(e_logic); },
-              acc,
-              acc,
-              tv,
-              head_size_v);
-        }
-
-        s_prime = s_prime * m_delta + e_logic;
-        m_prime = m_i;
-      }
-    }
-  });
-  }
-
-  {
-  mla_timing::ScopedTimer task_timer(g_timing_ids.accum_chunk);
   at::parallel_for(0, batches * num_heads, 0, [&](int64_t begin, int64_t end) {
     // NB: here we use logits[b][h][0] as acc, since
     // for the first kv split (kv_id == 0):
@@ -882,14 +832,13 @@ void decode_accumulate_kv_splits(
     //   e_logic = std::exp(0) = 1
     //   acc = acc * m_delta + tv * e_logic = tv
     for (int64_t i = begin; i < end; ++i) {
-
       float* __restrict__ acc = attn_logits + i * l_stride1;
 
       float s_prime = 0.f;
       float m_prime = -std::numeric_limits<scalar_t>::infinity();
 
       // update acc with from each kv_split
-      for (int64_t kv_id = 0; kv_id < num_kv_splits; kv_id += chunk_size) {
+      for (int64_t kv_id = 0; kv_id < num_kv_splits; ++kv_id) {
         float* __restrict__ tv = acc + kv_id * l_stride2;
         const float tlogic = (acc + kv_id * l_stride2)[head_size_v];
 
@@ -912,7 +861,6 @@ void decode_accumulate_kv_splits(
       copy_stub<scalar_t>(output + i * head_size_v, acc, 1 / s_prime, head_size_v);
     }
   });
-  }
 }
 
 template <typename scalar_t, typename index_t, int64_t BLOCK_N>
