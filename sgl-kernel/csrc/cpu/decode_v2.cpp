@@ -828,6 +828,8 @@ void decode_accumulate_kv_splits(
   const int64_t num_chunks = 80 / num_heads;
   const int64_t chunk_size = div_up(num_kv_splits, num_chunks);
 
+  {
+  mla_timing::ScopedTimer task_timer(g_timing_ids.cal_chunk);
   // parallel on [batches, num_heads]
   at::parallel_for(0, batches * num_heads * num_chunks, 0, [&](int64_t begin, int64_t end) {
     // NB: here we use logits[b][h][0] as acc, since
@@ -868,7 +870,10 @@ void decode_accumulate_kv_splits(
       }
     }
   });
+  }
 
+  {
+  mla_timing::ScopedTimer task_timer(g_timing_ids.accum_chunk);
   at::parallel_for(0, batches * num_heads, 0, [&](int64_t begin, int64_t end) {
     // NB: here we use logits[b][h][0] as acc, since
     // for the first kv split (kv_id == 0):
@@ -906,6 +911,7 @@ void decode_accumulate_kv_splits(
       copy_stub<scalar_t>(output + i * head_size_v, acc, 1 / s_prime, head_size_v);
     }
   });
+  }
 }
 
 template <typename scalar_t, typename index_t, int64_t BLOCK_N>
