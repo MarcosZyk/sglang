@@ -857,7 +857,7 @@ void decode_accumulate_kv_splits(
         float m_i = std::max(tlogic, m_prime);
         float m_delta = std::exp(m_prime - m_i);
         float e_logic = std::exp(tlogic - m_i);
-        if (kv_id != 0) {
+        if (kv_id != chunk_start) {
           mla_timing::ScopedTimer task_timer(g_timing_ids.single_accum);
           at::vec::map2<float>(
               [m_delta, e_logic](Vec x, Vec y) { return x * Vec(m_delta) + y * Vec(e_logic); },
