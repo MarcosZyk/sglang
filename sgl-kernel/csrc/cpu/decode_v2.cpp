@@ -832,6 +832,7 @@ void decode_accumulate_kv_splits(
   mla_timing::ScopedTimer task_timer(g_timing_ids.cal_chunk);
   // parallel on [batches, num_heads]
   at::parallel_for(0, batches * num_heads * num_chunks, 0, [&](int64_t begin, int64_t end) {
+    mla_timing::ScopedTimer task_timer(g_timing_ids.chunk_loop);
     // NB: here we use logits[b][h][0] as acc, since
     // for the first kv split (kv_id == 0):
     //   m_delta = std::exp(-inf) = 0
@@ -857,6 +858,7 @@ void decode_accumulate_kv_splits(
         float m_delta = std::exp(m_prime - m_i);
         float e_logic = std::exp(tlogic - m_i);
         if (kv_id != 0) {
+          mla_timing::ScopedTimer task_timer(g_timing_ids.single_accum);
           at::vec::map2<float>(
               [m_delta, e_logic](Vec x, Vec y) { return x * Vec(m_delta) + y * Vec(e_logic); },
               acc,
