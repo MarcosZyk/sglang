@@ -47,23 +47,26 @@ class KernelAutoTuner:
             if self.core_number % i == 0:
                 self.factor_pair_list.append((i, self.core_number // i))
 
-    def calculate_config(self, seq_len: int) -> tuple[int, int]:
+    def calculate_config(self, batch_size: int, seq_len: torch.Tensor) -> tuple[int, int]:
         # input sequence length, output (head block size, split num)
-        index = 0
-        minimal_overhead = -1
-        for i, factor_pair in enumerate(self.factor_pair_list):
-            block_num = factor_pair[0]
-            split_num = factor_pair[1]
-
-            block_size = math.ceil(self.q_head_num / block_num)
-            split_size = math.ceil(seq_len / split_num)
-
-            overhead = self.redundant_io_size(block_num, block_size, split_num, split_size)
-            if minimal_overhead > overhead or minimal_overhead == -1:
-                minimal_overhead = overhead
-                index = i
-
-        return self.factor_pair_list[index]
+        logger.info(f"Calculate Attention Kernel Config for "
+                    f"batch_size={batch_size}, seq_len={[seq_len[_] for _ in range(batch_size)]}")
+        return self.q_head_num, self.core_number
+        # index = 0
+        # minimal_overhead = -1
+        # for i, factor_pair in enumerate(self.factor_pair_list):
+        #     block_num = factor_pair[0]
+        #     split_num = factor_pair[1]
+        #
+        #     block_size = math.ceil(self.q_head_num / block_num)
+        #     split_size = math.ceil(seq_len / split_num)
+        #
+        #     overhead = self.redundant_io_size(block_num, block_size, split_num, split_size)
+        #     if minimal_overhead > overhead or minimal_overhead == -1:
+        #         minimal_overhead = overhead
+        #         index = i
+        #
+        # return self.factor_pair_list[index]
 
 
     def redundant_io_size(self, block_num: int, block_size: int, split_num: int, split_size: int) -> int:
@@ -124,7 +127,7 @@ class IntelAMXAttnBackend(AttentionBackend):
         bs = forward_batch.batch_size
         if self.auto_tune:
             # todo consider bs > 1
-            block_size, split_num = self.tuner.calculate_config(forward_batch.seq_lens_sum)
+            block_size, split_num = self.tuner.calculate_config(bs, forward_batch.seq_lens)
             forward_batch.split_num = split_num
             forward_batch.head_block_size = block_size
         else:
