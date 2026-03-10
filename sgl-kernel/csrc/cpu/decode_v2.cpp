@@ -825,7 +825,7 @@ void decode_accumulate_kv_splits(
     int64_t l_stride2) {
   using Vec = at::vec::Vectorized<float>;
 
-  const int64_t num_chunks = num_cores / num_heads;
+  const int64_t num_chunks = 80 / num_heads;
   const int64_t chunk_size = div_up(num_kv_splits, num_chunks);
 
   // parallel on [batches, num_heads]
