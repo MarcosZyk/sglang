@@ -279,7 +279,7 @@ private:
 // 在程序启动或 kernel 第一次调用前
 struct TimingIds {
     int load_kv, pack, qk_gemm, softmax_prep, sv_gemm, final_norm, task_loop, task_total, thread_total;
-    int cal_chunk, accum_chunk, copy_o, accum_o, kernel_total;
+    int cal_chunk, accum_chunk, accum_o, kernel_total;
 
     TimingIds() {
         load_kv = mla_timing::mla_timing_register_stage("load_kv");
@@ -293,7 +293,6 @@ struct TimingIds {
         thread_total = mla_timing::mla_timing_register_stage("thread_total");
         cal_chunk = mla_timing::mla_timing_register_stage("cal_chunk");
         accum_chunk = mla_timing::mla_timing_register_stage("accum_chunk");
-        copy_o = mla_timing::mla_timing_register_stage("copy_o");
         accum_o = mla_timing::mla_timing_register_stage("accum_o");
         kernel_total = mla_timing::mla_timing_register_stage("kernel_total");
     }

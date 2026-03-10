@@ -850,8 +850,8 @@ void decode_accumulate_kv_splits(
 
       // update acc with from each kv_split
       for (int64_t kv_id = chunk_start; kv_id < chunk_end; ++kv_id) {
-        float* __restrict__ tv = acc + kv_id * l_stride2;
-        const float tlogic = (acc + kv_id * l_stride2)[head_size_v];
+        float* __restrict__ tv = acc + (kv_id - chunk_start) * l_stride2;
+        const float tlogic = (acc + (kv_id - chunk_start) * l_stride2)[head_size_v];
 
         float m_i = std::max(tlogic, m_prime);
         float m_delta = std::exp(m_prime - m_i);
@@ -908,10 +908,7 @@ void decode_accumulate_kv_splits(
         m_prime = m_i;
       }
 
-      {
-      mla_timing::ScopedTimer task_timer(g_timing_ids.copy_o);
       copy_stub<scalar_t>(output + i * head_size_v, acc, 1 / s_prime, head_size_v);
-      }
     }
   });
   }
