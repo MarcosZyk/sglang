@@ -1055,8 +1055,10 @@ void decode_attention_mla_kernel_impl(
   // partition the heads into blocks for parallel
   const int64_t num_blocks = div_up(num_heads, BLOCK_H);
 
+  const int64_t task_per_thread = batches * num_blocks * num_kv_splits / 80;
+
   // parallel on [batches, num_blocks, num_kv_splits]
-  at::parallel_for(0, batches * num_blocks * num_kv_splits, 0, [&](int64_t begin, int64_t end) {
+  at::parallel_for(0, batches * num_blocks * num_kv_splits, task_per_thread, [&](int64_t begin, int64_t end) {
     mla_timing::ScopedTimer task_timer(g_timing_ids.thread_total);
     int64_t bs{0}, block_id{0}, kv_id{0};
     data_index_init(begin, bs, batches, block_id, num_blocks, kv_id, num_kv_splits);
