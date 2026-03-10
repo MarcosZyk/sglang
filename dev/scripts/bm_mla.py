@@ -8,8 +8,8 @@ import sgl_kernel
 
 torch.manual_seed(1234)
 
-def bm_mla(seq_len: int, head_num: int, head_block_size: int, split_num: int, ) -> float:
-    B = 1
+def bm_mla(seq_len: int, head_num: int, head_block_size: int, split_num: int, batch_size: int,) -> float:
+    B = batch_size
     H_Q = head_num
     H_KV = 1
     D = 576
@@ -78,6 +78,7 @@ if __name__ == "__main__":
     parser.add_argument('--head-num', '-q', type=int, default=32, )
     parser.add_argument('--head-block-size', '-b', type=int, default=6, )
     parser.add_argument('--split-num', '-s', type=int, default=8, )
+    parser.add_argument('--batch-size', type=int, default=1, )
     parser.add_argument('--bind-numa', '-c', type=str, default="80-119", )
 
     # 解析参数
@@ -86,16 +87,17 @@ if __name__ == "__main__":
     head_num = args.head_num
     head_block_size = args.head_block_size
     split_num = args.split_num
+    batch_size = args.batch_size
 
     with torch.inference_mode():
         torch.ops.sgl_kernel.init_cpu_threads_env(args.bind_numa)
 
         # warm up
         print(f"Start Warmup")
-        bm_mla(seq_len, head_num, head_block_size, split_num)
+        bm_mla(seq_len, head_num, head_block_size, split_num, batch_size)
         print(f"Finish Warmup")
 
         torch.ops.sgl_kernel.enable_timing(torch.empty([]))
         for i in range(5):
-            bm_mla(seq_len, head_num, head_block_size, split_num)
+            bm_mla(seq_len, head_num, head_block_size, split_num, batch_size)
         torch.ops.sgl_kernel.export_timing(torch.empty([]))
