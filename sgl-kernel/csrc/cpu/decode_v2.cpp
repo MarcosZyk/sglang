@@ -908,7 +908,10 @@ void decode_accumulate_kv_splits(
         m_prime = m_i;
       }
 
+      {
+      mla_timing::ScopedTimer task_timer(g_timing_ids.copy_o);
       copy_stub<scalar_t>(output + i * head_size_v, acc, 1 / s_prime, head_size_v);
+      }
     }
   });
   }
