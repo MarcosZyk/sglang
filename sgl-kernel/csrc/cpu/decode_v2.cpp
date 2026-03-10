@@ -831,7 +831,9 @@ void decode_accumulate_kv_splits(
     //   m_delta = std::exp(-inf) = 0
     //   e_logic = std::exp(0) = 1
     //   acc = acc * m_delta + tv * e_logic = tv
+    mla_timing::ScopedTimer task_timer(g_timing_ids.accum_thread);
     for (int64_t i = begin; i < end; ++i) {
+      mla_timing::ScopedTimer task_timer(g_timing_ids.accum_loop);
       float* __restrict__ acc = attn_logits + i * l_stride1;
 
       float s_prime = 0.f;
