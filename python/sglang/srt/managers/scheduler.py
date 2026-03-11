@@ -2794,6 +2794,9 @@ def run_scheduler_process(
     pipe_writer,
     balance_meta: Optional[DPBalanceMeta] = None,
 ):
+    pid = os.getpid()
+    os.sched_setaffinity(pid, range(40, 119))
+
     if server_args.enable_trace:
         process_tracing_init(server_args.oltp_traces_endpoint, "sglang")
         if server_args.disaggregation_mode == "null":
