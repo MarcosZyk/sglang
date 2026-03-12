@@ -654,9 +654,14 @@ class ModelRunner:
                     # Bind OpenMP threads to CPU cores
                     torch.ops.sgl_kernel.init_cpu_threads_env(self.local_omp_cpuid)
 
-                    # Set local size to hint SGLang to use shared memory based AllReduce
-                    os.environ["LOCAL_SIZE"] = str(self.tp_size)
-                    torch.ops.sgl_kernel.initialize(self.tp_size, self.tp_rank)
+                    use_amx_default_allreduce = os.getenv("SGLANG_USE_AMX_DEFAULT_ALLREDUCE", "0")
+                    if use_amx_default_allreduce == "0":
+                        logger.info(f"Using shared memory based AllReduce with intel amx backend.")
+                        # Set local size to hint SGLang to use shared memory based AllReduce
+                        os.environ["LOCAL_SIZE"] = str(self.tp_size)
+                        torch.ops.sgl_kernel.initialize(self.tp_size, self.tp_rank)
+                    else:
+                        logger.info("Using torch distributed AllReduce with intel amx backend.")
 
                     @torch.library.register_fake("sgl_kernel::shm_allgather")
                     def _(data, dim):

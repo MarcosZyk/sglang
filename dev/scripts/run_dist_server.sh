@@ -3,6 +3,8 @@ HOST_PORT=$2
 BIND_NUMA=$3
 
 export SGLANG_CPU_OMP_THREADS_BIND=$BIND_NUMA
+export SGLANG_USE_AMX_DEFAULT_ALLREDUCE=1
+export AMX_KERNEL_AUTO_TUNE=1
 
 python3 -m sglang.launch_server \
     --device cpu \

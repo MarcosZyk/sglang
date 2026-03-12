@@ -67,6 +67,7 @@ TensorMetadata = namedtuple("TensorMetadata", ["device", "dtype", "size"])
 # use int value instead of ReduceOp.SUM to support torch compile
 REDUCE_OP_SUM = int(torch.distributed.ReduceOp.SUM)
 
+use_amx_default_allreduce = os.getenv("SGLANG_USE_AMX_DEFAULT_ALLREDUCE", "0") == "0"
 
 def _split_tensor_dict(
     tensor_dict: Dict[str, Union[torch.Tensor, Any]]
@@ -491,7 +492,7 @@ class GroupCoordinator:
             return input_
 
         if input_.is_cpu:
-            if is_shm_available(input_.dtype, self.world_size, self.local_size):
+            if is_shm_available(input_.dtype, self.world_size, self.local_size) and use_amx_default_allreduce:
                 torch.ops.sgl_kernel.shm_allreduce(input_, REDUCE_OP_SUM)
             else:
                 torch.distributed.all_reduce(input_, group=self.device_group)
