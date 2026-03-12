@@ -15,4 +15,5 @@ python3 -m sglang.launch_server \
     --dist-init-addr 127.0.0.1:20000 \
     --host 0.0.0.0 --port $HOST_PORT \
     --nnodes 2 \
-    --node-rank $NODE_RANK
+    --node-rank $NODE_RANK \
+     --model-loader-extra-config '{"enable_multithread_load": true, "num_threads": 64}' \

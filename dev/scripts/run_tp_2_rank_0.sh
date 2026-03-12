@@ -1,1 +1,1 @@
-bash ./run_dist_server.sh 0 30010 '0-59|60-119'
+bash ./run_dist_server.sh 0 30010 '40-79|80-119'
