@@ -8,11 +8,6 @@ from typing import Dict
 
 import torch
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-SGL_KERNEL_PY = REPO_ROOT / "sgl-kernel" / "python"
-if str(SGL_KERNEL_PY) not in sys.path:
-    sys.path.insert(0, str(SGL_KERNEL_PY))
-
 import sgl_kernel  # noqa: E402,F401
 
 INVOCATIONS_PER_ROUND = 61
