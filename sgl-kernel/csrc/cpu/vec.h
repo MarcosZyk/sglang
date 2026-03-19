@@ -146,6 +146,30 @@ inline float vec_reduce_max(const Vectorized<float>& a) {
 }
 #endif
 
+inline Vectorized<float> softmax_exp_u20(const Vectorized<float>& x) {
+  return x.exp_u20();
+}
+
+inline Vectorized<float> softmax_tanh(const Vectorized<float>& x) {
+#if defined(CPU_CAPABILITY_AVX512)
+  // Rational tanh approximation on a clamped domain. This keeps the
+  // logit-cap path bounded/monotonic while avoiding the heavier libm-style tanh.
+  const Vectorized<float> limit(3.0f);
+  const Vectorized<float> neg_limit(-3.0f);
+  const Vectorized<float> c0(27.0f);
+  const Vectorized<float> c1(9.0f);
+  Vectorized<float> z = minimum(maximum(x, neg_limit), limit);
+  Vectorized<float> z2 = z * z;
+  return z * (z2 + c0) / (z2 * c1 + c0);
+#else
+  return x.tanh();
+#endif
+}
+
+inline Vectorized<float> apply_logit_cap(const Vectorized<float>& x, float logit_cap, float rlogit_cap) {
+  return Vectorized<float>(logit_cap) * softmax_tanh(x * Vectorized<float>(rlogit_cap));
+}
+
 // https://github.com/InternLM/lmdeploy/blob/086481ed84b59bee3b8e4274e5fc69620040c048/lmdeploy/pytorch/kernels/cuda/w8a8_triton_kernels.py#L282
 template <typename scalar_t>
 inline void

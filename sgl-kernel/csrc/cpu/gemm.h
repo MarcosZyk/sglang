@@ -21,7 +21,14 @@ template <typename T>
 inline bool can_use_brgemm(int M);
 template <>
 inline bool can_use_brgemm<at::BFloat16>(int M) {
+#if defined(CPU_CAPABILITY_AVX512)
+  // Decode / speculative decode commonly runs with M in [1, 4] per TP rank.
+  // On AMX-capable builds, packed weights + brgemm are still preferable for
+  // QKV/O/FFN and BF16 MoE over the AVX512 tinygemm fallback.
+  return M >= 1;
+#else
   return M > 4;
+#endif
 }
 template <>
 inline bool can_use_brgemm<at::Half>(int M) {

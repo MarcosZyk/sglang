@@ -97,6 +97,44 @@ void extend_attention_cpu(
     double sm_scale,
     double logit_cap);
 
+void extend_attention_treemask_cpu(
+    at::Tensor& q_extend,
+    at::Tensor& o_extend,
+    at::Tensor& k_buffer,
+    at::Tensor& v_buffer,
+    at::Tensor& req_to_token,
+    at::Tensor& req_pool_indices,
+    at::Tensor& seq_lens,
+    at::Tensor& extend_seq_lens,
+    at::Tensor& extend_start_loc,
+    at::Tensor& custom_mask,
+    int64_t max_len_extend,
+    double sm_scale,
+    double logit_cap);
+
+void decode_attention_cpu_v2(
+    at::Tensor& query,
+    at::Tensor& k_cache,
+    at::Tensor& v_cache,
+    at::Tensor& output,
+    at::Tensor& key,
+    at::Tensor& value,
+    at::Tensor& loc,
+    at::Tensor& attn_logits,
+    at::Tensor& attn_logits_merged,
+    at::Tensor& req_to_token,
+    at::Tensor& req_pool_indices,
+    at::Tensor& seq_lens,
+    double sm_scale,
+    double logit_cap,
+    int64_t tp_rank,
+    int64_t tp_size,
+    int64_t kv_block_length);
+
+void decode_merge_attention_sp_cpu_v2(
+    at::Tensor& output,
+    at::Tensor& attn_logits);
+
 // weight prepack
 at::Tensor convert_weight_packed(at::Tensor& weight);
 
@@ -233,6 +271,95 @@ std::tuple<at::Tensor, at::Tensor> rotary_embedding_cpu(
 // CPU and memory binding
 std::string init_cpu_threads_env(const std::string& cpu_ids);
 
+void build_tree_kernel_efficient(
+    at::Tensor parent_list,
+    at::Tensor selected_index,
+    at::Tensor verified_seq_len,
+    at::Tensor tree_mask,
+    at::Tensor positions,
+    at::Tensor retrive_index,
+    at::Tensor retrive_next_token,
+    at::Tensor retrive_next_sibling,
+    int64_t topk,
+    int64_t depth,
+    int64_t draft_token_num,
+    int64_t tree_mask_mode);
+
+void verify_tree_greedy(
+    at::Tensor predicts,          // mutable
+    at::Tensor accept_index,      // mutable
+    at::Tensor accept_token_num,  // mutable
+    at::Tensor candidates,
+    at::Tensor retrive_index,
+    at::Tensor retrive_next_token,
+    at::Tensor retrive_next_sibling,
+    at::Tensor target_predict,
+    int64_t cuda_stream);
+
+void create_extend_after_decode_spec_info_cpu(
+    at::Tensor verified_id,
+    at::Tensor seq_lens,
+    at::Tensor accept_lens,
+    at::Tensor positions,
+    at::Tensor new_verified_id);
+
+void assign_req_to_token_pool_cpu(
+    at::Tensor req_pool_indices,
+    at::Tensor req_to_token,
+    at::Tensor start_offset,
+    at::Tensor end_offset,
+    at::Tensor out_cache_loc,
+    int64_t pool_len,
+    int64_t bs);
+
+void assign_draft_cache_locs_cpu(
+    at::Tensor req_pool_indices,
+    at::Tensor req_to_token,
+    at::Tensor seq_lens,
+    at::Tensor extend_lens,
+    at::Tensor num_new_pages_per_topk,
+    at::Tensor out_cache_loc,
+    int64_t pool_len,
+    int64_t topk,
+    int64_t speculative_num_steps,
+    int64_t page_size,
+    int64_t num_seqs);
+
+void generate_draft_decode_kv_indices_cpu(
+    at::Tensor req_pool_indices,
+    at::Tensor req_to_token,
+    at::Tensor paged_kernel_lens,
+    at::Tensor kv_indices,
+    at::Tensor kv_indptr,
+    at::Tensor positions,
+    int64_t pool_len,
+    int64_t kv_indices_stride,
+    int64_t kv_indptr_stride,
+    int64_t page_size);
+
+void align_evict_mask_to_page_size_cpu(
+    at::Tensor seq_lens,
+    at::Tensor evict_mask,
+    int64_t page_size,
+    int64_t num_draft_tokens);
+
+void get_target_cache_loc_cpu(
+    at::Tensor tgt_cache_loc,
+    at::Tensor to_free_slots,
+    at::Tensor accept_length,
+    at::Tensor to_free_num_slots,
+    at::Tensor out_cache_loc,
+    int64_t num_verify_tokens,
+    int64_t bs);
+
+void filter_finished_cache_loc_cpu(
+    at::Tensor out_cache_loc,
+    at::Tensor tgt_cache_loc,
+    at::Tensor accept_length,
+    at::Tensor accept_length_filter,
+    int64_t bs,
+    int64_t draft_token_num);
+
 TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
   // activation
   m.def("silu_and_mul_cpu(Tensor input) -> Tensor");
@@ -281,6 +408,24 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
       "Tensor v_buffer, Tensor req_to_token, Tensor req_pool_indices, Tensor seq_lens, Tensor extend_seq_lens, Tensor "
       "extend_start_loc, int max_len_extend, float sm_scale, float logit_cap) -> ()");
   m.impl("extend_attention_cpu", torch::kCPU, &extend_attention_cpu);
+
+  // extend with tree mask (speculative decoding verify)
+  m.def(
+      "extend_attention_treemask_cpu(Tensor q_extend, Tensor(a!) o_extend, Tensor k_buffer, "
+      "Tensor v_buffer, Tensor req_to_token, Tensor req_pool_indices, Tensor seq_lens, Tensor extend_seq_lens, Tensor "
+      "extend_start_loc, Tensor custom_mask, int max_len_extend, float sm_scale, float logit_cap) -> ()");
+  m.impl("extend_attention_treemask_cpu", torch::kCPU, &extend_attention_treemask_cpu);
+
+  m.def(
+      "decode_attention_cpu_v2(Tensor query, Tensor k_cache, Tensor v_cahce, Tensor(a!) output, Tensor key, Tensor value, "
+      "Tensor loc, Tensor attn_logits, Tensor attn_logits_merged, Tensor req_to_token, Tensor req_pool_indices, Tensor seq_lens, float sm_scale, "
+      "float logit_cap, int tp_rank, int tp_size, int kv_block_length) -> ()");
+  m.impl("decode_attention_cpu_v2", torch::kCPU, &decode_attention_cpu_v2);
+
+  m.def(
+      "decode_merge_attention_sp_cpu_v2(Tensor(a!) output, Tensor attn_logits) -> ()");
+  m.impl("decode_merge_attention_sp_cpu_v2", torch::kCPU, &decode_merge_attention_sp_cpu_v2);
+
 
   // weight prepack
   m.def("convert_weight_packed(Tensor weight) -> Tensor");
@@ -363,6 +508,65 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
 
   // CPU and memory binding
   m.def("init_cpu_threads_env(str cpu_ids) -> str");
+
+  // verify tree greedy
+  m.def(
+      "verify_tree_greedy(Tensor! predicts, Tensor! accept_index, Tensor! accept_token_num, "
+      "Tensor candidates, Tensor retrive_index, Tensor retrive_next_token, Tensor retrive_next_sibling, "
+      "Tensor target_predict, int cuda_stream) -> ()");
+    m.impl("verify_tree_greedy", torch::kCPU, &verify_tree_greedy);
+
+  m.def(
+      "build_tree_kernel_efficient(Tensor parent_list, Tensor selected_index, Tensor verified_seq_len, "
+      "Tensor! tree_mask, Tensor! positions, Tensor! retrive_index, Tensor! retrive_next_token, "
+      "Tensor! retrive_next_sibling, int topk, int depth, int draft_token_num, int tree_mask_mode) -> "
+      "()");
+  m.impl("build_tree_kernel_efficient", torch::kCPU, &build_tree_kernel_efficient);
+
+  // create_extend_after_decode_spec_info
+  m.def(
+      "create_extend_after_decode_spec_info_cpu(Tensor verified_id, Tensor seq_lens, "
+      "Tensor accept_lens, Tensor! positions, Tensor! new_verified_id) -> ()");
+  m.impl("create_extend_after_decode_spec_info_cpu", torch::kCPU, &create_extend_after_decode_spec_info_cpu);
+
+  // assign_req_to_token_pool
+  m.def(
+      "assign_req_to_token_pool_cpu(Tensor req_pool_indices, Tensor! req_to_token, "
+      "Tensor start_offset, Tensor end_offset, Tensor out_cache_loc, int pool_len, int bs) -> ()");
+  m.impl("assign_req_to_token_pool_cpu", torch::kCPU, &assign_req_to_token_pool_cpu);
+
+  // assign_draft_cache_locs
+  m.def(
+      "assign_draft_cache_locs_cpu(Tensor req_pool_indices, Tensor! req_to_token, "
+      "Tensor seq_lens, Tensor extend_lens, Tensor num_new_pages_per_topk, Tensor! out_cache_loc, "
+      "int pool_len, int topk, int speculative_num_steps, int page_size, int num_seqs) -> ()");
+  m.impl("assign_draft_cache_locs_cpu", torch::kCPU, &assign_draft_cache_locs_cpu);
+
+  // generate_draft_decode_kv_indices
+  m.def(
+      "generate_draft_decode_kv_indices_cpu(Tensor req_pool_indices, Tensor req_to_token, "
+      "Tensor paged_kernel_lens, Tensor! kv_indices, Tensor! kv_indptr, Tensor positions, "
+      "int pool_len, int kv_indices_stride, int kv_indptr_stride, int page_size) -> ()");
+  m.impl("generate_draft_decode_kv_indices_cpu", torch::kCPU, &generate_draft_decode_kv_indices_cpu);
+
+  // align_evict_mask_to_page_size
+  m.def(
+      "align_evict_mask_to_page_size_cpu(Tensor seq_lens, Tensor! evict_mask, "
+      "int page_size, int num_draft_tokens) -> ()");
+  m.impl("align_evict_mask_to_page_size_cpu", torch::kCPU, &align_evict_mask_to_page_size_cpu);
+
+  // get_target_cache_loc
+  m.def(
+      "get_target_cache_loc_cpu(Tensor! tgt_cache_loc, Tensor! to_free_slots, "
+      "Tensor accept_length, Tensor to_free_num_slots, Tensor out_cache_loc, "
+      "int num_verify_tokens, int bs) -> ()");
+  m.impl("get_target_cache_loc_cpu", torch::kCPU, &get_target_cache_loc_cpu);
+
+  // filter_finished_cache_loc
+  m.def(
+      "filter_finished_cache_loc_cpu(Tensor! out_cache_loc, Tensor tgt_cache_loc, "
+      "Tensor accept_length, Tensor accept_length_filter, int bs, int draft_token_num) -> ()");
+  m.impl("filter_finished_cache_loc_cpu", torch::kCPU, &filter_finished_cache_loc_cpu);
 }
 
 TORCH_LIBRARY_IMPL(sgl_kernel, CatchAll, m) {

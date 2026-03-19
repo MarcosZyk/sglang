@@ -8,7 +8,7 @@ namespace {
 //   1. tune the value for BLOCK_N
 //   2. planning for {batches, num_heads, num_kv_splits}
 //      and use actual num_kv_splits for small seq length
-//   3. try fast impl of `.tanh()`
+//   3. tune the fast-math logit-cap path
 //   4. provide amx kernel for index_gemm_kernel_nn when M = 16
 //
 
@@ -54,6 +54,30 @@ inline void pack_vnni_Nx32(
   for (int k = 0; k < 16; ++k) {
     _mm512_mask_storeu_epi32(dst0 + k * ld_dst0 * 2, vmask, vinputs[k]);
   }
+}
+
+template <typename scalar_t, typename index_t>
+inline void pack_vnni_Kx32(
+    scalar_t* __restrict__ dst,
+    const scalar_t* __restrict__ src,
+    const index_t* __restrict__ ind,
+    int K,
+    int ld_src,
+    int ld_dst) {
+  __m512i vinputs[2];
+
+  int k = 0;
+  for (; k < K; ++k) {
+    vinputs[k] = _mm512_loadu_si512(src + ind[k] * ld_src);
+  }
+  for (; k < 2; ++k) {
+    vinputs[k] = _mm512_set1_epi32(0);
+  }
+
+  __m512i d0, d1;
+  std::tie(d0, d1) = transpose_2x32_16bit(vinputs[0], vinputs[1]);
+  _mm512_storeu_si512(dst + 0 * ld_dst * 2, d0);
+  _mm512_storeu_si512(dst + 0 * ld_dst * 2 + 32, d1);
 }
 #endif
 
@@ -126,6 +150,51 @@ void pack_vnni(
 #endif
 }
 
+template <typename scalar_t, typename index_t>
+void pack_vnni_value(
+    scalar_t* __restrict__ dst,
+    const scalar_t* __restrict__ src,
+    const index_t* __restrict__ ind,
+    int K,
+    int N,
+    int ld_src,
+    int ld_dst) {
+#if defined(CPU_CAPABILITY_AVX512)
+  const int KB = div_up(K, 2);
+  const int NB = N / 32;
+
+  for (int kb = 0; kb < KB; ++kb) {
+    for (int nb = 0; nb < NB; ++nb) {
+      int kb_size = std::min(K - kb * 2, 2);
+      pack_vnni_Kx32<scalar_t, index_t>(
+          /*    dst */ dst + ((kb * 2) >> 1) * ld_dst * 2 + nb * 32 * 2,
+          /*    src */ src + kb * 2 * ld_src + nb * 32,
+          /*    ind */ ind + kb * 2,
+          /*      K */ kb_size,
+          /* ld_src */ ld_src,
+          /* ld_dst */ ld_dst);
+    }
+  }
+#else
+  int k = 0;
+  for (; k < (K >> 1) * 2; k += 2) {
+    index_t index0 = ind[k + 0];
+    index_t index1 = ind[k + 1];
+    for (int n = 0; n < N; ++n) {
+      dst[(k >> 1) * ld_dst * 2 + n * 2 + 0] = src[index0 * ld_src + n];
+      dst[(k >> 1) * ld_dst * 2 + n * 2 + 1] = src[index1 * ld_src + n];
+    }
+  }
+  if (K % 2 != 0) {
+    index_t index = ind[K - 1];
+    for (int n = 0; n < N; ++n) {
+      dst[(K >> 1) * ld_dst * 2 + n * 2 + 0] = src[index * ld_src + n];
+      dst[(K >> 1) * ld_dst * 2 + n * 2 + 1] = 0;
+    }
+  }
+#endif
+}
+
 template <typename scalar_t>
 inline void fill_stub(scalar_t* __restrict__ out, float val, int64_t size) {
   using Vec = at::vec::Vectorized<scalar_t>;
@@ -173,6 +242,44 @@ inline void copy_stub(scalar_t* __restrict__ out, const scalar_t* __restrict__ s
   for (; d < size; ++d) {
     out[d] = src[d];
   }
+}
+
+inline int64_t max_seq_len_in_batch(const int64_t* __restrict__ seq_lens, int64_t batches) {
+  int64_t max_seq_len = 0;
+  for (int64_t bs = 0; bs < batches; ++bs) {
+    max_seq_len = std::max(max_seq_len, seq_lens[bs]);
+  }
+  return max_seq_len;
+}
+
+inline int64_t choose_decode_block_n(bool is_mla, int64_t head_size, int64_t max_seq_len) {
+  UNUSED(max_seq_len);
+  // MLA uses a much larger K dimension (e.g. 576/512) than GQA and benefits from
+  // a smaller KV tile to keep the packed K/V blocks inside L2 on AMX CPUs.
+  if (is_mla || head_size > 256) {
+    return 128;
+  }
+  return 256;
+}
+
+inline bool use_grouped_packed_decode_kernel(
+    int64_t batches,
+    int64_t num_heads,
+    int64_t num_heads_kv,
+    int64_t head_size,
+    int64_t head_size_v,
+    int64_t max_seq_len) {
+  UNUSED(batches);
+  UNUSED(max_seq_len);
+  if (num_heads_kv <= 0 || num_heads % num_heads_kv != 0) {
+    return false;
+  }
+  const int64_t num_groups = num_heads / num_heads_kv;
+  // The generic grouped kernel still uses index_gemm (AVX512 gather + dot-product).
+  // Prefer the packed path whenever the per-rank GQA shape is AMX-friendly so decode
+  // actually runs through brgemm on Granite Rapids / AMX CPUs.
+  return num_groups <= 8 && head_size <= 256 && head_size_v <= 256 &&
+      head_size % TILE_K == 0 && head_size_v % TILE_K == 0;
 }
 
 template <typename scalar_t, int BLOCK_N>
@@ -943,10 +1050,10 @@ void decode_attention_kernel_impl(
             /* ldc */ 1,
             /* mtt */ max_total_num_tokens);
 
-        // TODO: `tanh` from torch uses sleef u10, going to be slow
+        // logit-cap is routed through vec.h fast-math helper on AVX512/AMX builds.
         if (has_logit_cap) {
           at::vec::map<float>(
-              [logit_cap, rlogit_cap](Vec x) { return Vec(logit_cap) * (x * Vec(rlogit_cap)).tanh(); },
+              [logit_cap, rlogit_cap](Vec x) { return apply_logit_cap(x, logit_cap, rlogit_cap); },
               s_i,
               s_i,
               n_size);
@@ -960,7 +1067,7 @@ void decode_attention_kernel_impl(
         float m_delta = std::exp(m_prime - m_i);
 
         // s_delta <- exp(s_i - m_i)
-        at::vec::map<float>([m_i](Vec x) { return (x - Vec(m_i)).exp_u20(); }, s_delta, s_i, n_size);
+        at::vec::map<float>([m_i](Vec x) { return softmax_exp_u20(x - Vec(m_i)); }, s_delta, s_i, n_size);
 
         // s' <- s' * m_delta + sum(s_delta)
         s_prime *= m_delta;
@@ -1138,7 +1245,10 @@ void decode_attention_mla_kernel_impl(
 
           // s_delta <- exp(s_i - m_i)
           at::vec::map<float>(
-              [m_i](Vec x) { return (x - Vec(m_i)).exp_u20(); }, s_delta + h * BLOCK_N, s_i + h * BLOCK_N, n_size);
+              [m_i](Vec x) { return softmax_exp_u20(x - Vec(m_i)); },
+              s_delta + h * BLOCK_N,
+              s_i + h * BLOCK_N,
+              n_size);
 
           // s' <- s' * m_delta + sum(s_delta)
           s_prime[h] *= m_delta[h];
@@ -1192,6 +1302,197 @@ void decode_attention_mla_kernel_impl(
   decode_accumulate_kv_splits(
       output, attn_logits, batches, num_heads, head_size_v, num_kv_splits, l_stride1, l_stride2);
 }  // MLA
+
+template <typename scalar_t, typename index_t, int64_t BLOCK_H, int64_t BLOCK_N>
+void decode_attention_grouped_packed_kernel_impl(
+    scalar_t* __restrict__ output,
+    float* __restrict__ attn_logits,
+    const scalar_t* __restrict__ query,
+    const scalar_t* __restrict__ k_buffer,
+    const scalar_t* __restrict__ v_buffer,
+    const index_t* __restrict__ req_to_token,
+    const int64_t* __restrict__ req_pool_indices,
+    const int64_t* __restrict__ seq_lens,
+    scalar_t* __restrict__ buffer,
+    int64_t batches,
+    int64_t num_heads,
+    int64_t num_heads_kv,
+    int64_t head_size,
+    int64_t head_size_v,
+    int64_t num_kv_splits,
+    int64_t q_strideM,
+    int64_t q_strideH,
+    int64_t k_strideN,
+    int64_t k_strideH,
+    int64_t v_strideN,
+    int64_t v_strideH,
+    float scaling,
+    float logit_cap,
+    int64_t max_num_reqs,
+    int64_t max_context_len,
+    int64_t max_total_num_tokens,
+    int64_t buffer_size_per_thread) {
+  using Vec = at::vec::Vectorized<float>;
+
+  const int64_t l_stride0 = num_heads * num_kv_splits * (head_size_v + 1);
+  const int64_t l_stride1 = num_kv_splits * (head_size_v + 1);
+  const int64_t l_stride2 = head_size_v + 1;
+
+  const bool has_logit_cap = logit_cap > 0;
+  float rlogit_cap = has_logit_cap ? 1 / logit_cap : 0.f;
+
+  const int64_t num_groups = num_heads / num_heads_kv;
+  const int64_t num_blocks = div_up(num_groups, BLOCK_H);
+
+  at::parallel_for(0, batches * num_heads_kv * num_blocks * num_kv_splits, 0, [&](int64_t begin, int64_t end) {
+    int64_t bs{0}, head_kv_id{0}, block_id{0}, kv_id{0};
+    data_index_init(begin, bs, batches, head_kv_id, num_heads_kv, block_id, num_blocks, kv_id, num_kv_splits);
+
+    int tid = at::get_thread_num();
+    scalar_t* __restrict__ Btmp0 = buffer + tid * buffer_size_per_thread;
+    scalar_t* __restrict__ Btmp1 = Btmp0 + BLOCK_N * head_size;
+    fill_stub(Btmp1, 0.f, BLOCK_N * head_size_v);
+
+    alignas(64) float s_i[BLOCK_H * BLOCK_N];
+    float* __restrict__ s_delta = s_i;
+    alignas(64) scalar_t s_delta2[BLOCK_H * BLOCK_N];
+
+    alignas(64) float s_prime[BLOCK_H];
+    alignas(64) float m_prime[BLOCK_H];
+    alignas(64) float m_delta[BLOCK_H];
+
+    for (int64_t i = begin; i < end; ++i) {
+      const int64_t h_start = head_kv_id * num_groups + block_id * BLOCK_H;
+      const int64_t h_end = head_kv_id * num_groups + std::min(block_id * BLOCK_H + BLOCK_H, num_groups);
+      const int64_t h_size = h_end - h_start;
+
+      const scalar_t* __restrict__ q_ptr = query + bs * q_strideM + h_start * q_strideH;
+
+      int64_t seq_len_kv = seq_lens[bs];
+      int64_t req_pool_id = req_pool_indices[bs];
+      TORCH_CHECK(seq_len_kv <= max_context_len, "seq_len_kv out of scope!");
+      TORCH_CHECK(req_pool_id < max_num_reqs, "req_pool_id out of scope!");
+
+      const int64_t SPLIT_SIZE = div_up(seq_len_kv, num_kv_splits);
+      const int64_t kv_start = kv_id * SPLIT_SIZE;
+      const int64_t kv_end = std::min(kv_start + SPLIT_SIZE, seq_len_kv);
+
+      fill_stub(s_prime, 0.f, BLOCK_H);
+      fill_stub(m_prime, -std::numeric_limits<float>::infinity(), BLOCK_H);
+
+      float* __restrict__ v_prime = attn_logits + bs * l_stride0 + h_start * l_stride1 + kv_id * l_stride2;
+      for (int64_t h = 0; h < h_size; ++h) {
+        fill_stub(v_prime + h * l_stride1, 0.f, head_size_v);
+      }
+
+      for (int64_t n = kv_start; n < kv_end; n += BLOCK_N) {
+        int64_t n_size = std::min(BLOCK_N, kv_end - n);
+        const int64_t padded_n_size = div_up(int(n_size), TILE_K) * TILE_K;
+        const index_t* __restrict__ indices = req_to_token + req_pool_id * max_context_len + n;
+
+        pack_vnni<scalar_t, index_t>(
+            /*    dst0 */ Btmp0,
+            /*    dst1 */ Btmp1,
+            /*     src */ k_buffer + head_kv_id * k_strideH,
+            /*     ind */ indices,
+            /*       N */ n_size,
+            /*       K */ head_size,
+            /*      Kv */ 0,
+            /*  ld_src */ k_strideN,
+            /* ld_dst0 */ BLOCK_N,
+            /* ld_dst1 */ head_size_v);
+
+        at::native::cpublas::brgemm(
+            /* M     */ h_size,
+            /* N     */ n_size,
+            /* K     */ head_size,
+            /* lda   */ q_strideH,
+            /* ldb   */ BLOCK_N,
+            /* ldc   */ BLOCK_N,
+            /* add_C */ false,
+            /* A     */ q_ptr,
+            /* B     */ Btmp0,
+            /* C     */ s_i);
+
+        const Vec scale_vec = Vec(scaling);
+        for (int64_t h = 0; h < h_size; ++h) {
+          float* __restrict__ s_row = s_i + h * BLOCK_N;
+          if (has_logit_cap) {
+            at::vec::map<float>(
+                [scale_vec, logit_cap, rlogit_cap](Vec x) { return apply_logit_cap(x * scale_vec, logit_cap, rlogit_cap); },
+                s_row,
+                s_row,
+                n_size);
+          } else {
+            at::vec::map<float>(
+                [scale_vec](Vec x) { return x * scale_vec; }, s_row, s_row, n_size);
+          }
+
+          float m_i = at::vec::reduce_all<float>(
+              [](Vec& x, Vec& y) { return at::vec::maximum(x, y); }, s_row, n_size);
+          m_i = std::max(m_i, m_prime[h]);
+
+          m_delta[h] = std::exp(m_prime[h] - m_i);
+
+          at::vec::map<float>(
+              [m_i](Vec x) { return softmax_exp_u20(x - Vec(m_i)); }, s_delta + h * BLOCK_N, s_row, n_size);
+
+          s_prime[h] *= m_delta[h];
+          s_prime[h] += at::vec::reduce_all<float>(
+              [](Vec& x, Vec& y) { return x + y; }, s_delta + h * BLOCK_N, n_size);
+
+          m_prime[h] = m_i;
+
+          float scale_m = m_delta[h];
+          at::vec::map<float>(
+              [scale_m](Vec x) { return x * Vec(scale_m); },
+              v_prime + h * l_stride1,
+              v_prime + h * l_stride1,
+              head_size_v);
+
+          fill_stub(s_delta + h * BLOCK_N + n_size, 0.f, padded_n_size - n_size);
+          copy_stub<scalar_t, BLOCK_N>(s_delta2 + h * BLOCK_N, s_delta + h * BLOCK_N);
+        }
+
+        pack_vnni_value<scalar_t, index_t>(
+            /*    dst */ Btmp1,
+            /*    src */ v_buffer + head_kv_id * v_strideH,
+            /*    ind */ indices,
+            /*     K  */ n_size,
+            /*     N  */ head_size_v,
+            /* ld_src */ v_strideN,
+            /* ld_dst */ head_size_v);
+
+        at::native::cpublas::brgemm(
+            /* M     */ h_size,
+            /* N     */ head_size_v,
+            /* K     */ padded_n_size,
+            /* lda   */ BLOCK_N,
+            /* ldb   */ head_size_v,
+            /* ldc   */ l_stride1,
+            /* add_C */ true,
+            /* A     */ s_delta2,
+            /* B     */ Btmp1,
+            /* C     */ v_prime);
+      }
+
+      if (kv_end > kv_start) {
+        for (int64_t h = 0; h < h_size; ++h) {
+          float s = 1 / s_prime[h];
+          at::vec::map<float>(
+              [s](Vec out) { return out * Vec(s); }, v_prime + h * l_stride1, v_prime + h * l_stride1, head_size_v);
+          (v_prime + h * l_stride1)[head_size_v] = m_prime[h] + std::log(s_prime[h]);
+        }
+      }
+
+      data_index_step(bs, batches, head_kv_id, num_heads_kv, block_id, num_blocks, kv_id, num_kv_splits);
+    }
+    at::native::cpublas::brgemm_release();
+  });
+
+  decode_accumulate_kv_splits(
+      output, attn_logits, batches, num_heads, head_size_v, num_kv_splits, l_stride1, l_stride2);
+}  // packed GQA/MQA
 
 template <typename scalar_t, typename index_t, int64_t BLOCK_N>
 void decode_attention_grouped_kernel_impl(
@@ -1299,7 +1600,7 @@ void decode_attention_grouped_kernel_impl(
 
         if (has_logit_cap) {
           at::vec::map<float>(
-              [logit_cap, rlogit_cap](Vec x) { return Vec(logit_cap) * (x * Vec(rlogit_cap)).tanh(); },
+              [logit_cap, rlogit_cap](Vec x) { return apply_logit_cap(x, logit_cap, rlogit_cap); },
               s_i,
               s_i,
               BLOCK_H * BLOCK_N);
@@ -1317,7 +1618,10 @@ void decode_attention_grouped_kernel_impl(
 
           // s_delta <- exp(s_i - m_i)
           at::vec::map<float>(
-              [m_i](Vec x) { return (x - Vec(m_i)).exp_u20(); }, s_delta + h * BLOCK_N, s_i + h * BLOCK_N, n_size);
+              [m_i](Vec x) { return softmax_exp_u20(x - Vec(m_i)); },
+              s_delta + h * BLOCK_N,
+              s_i + h * BLOCK_N,
+              n_size);
 
           // s' <- s' * m_delta + sum(s_delta)
           s_prime[h] *= m_delta[h];
@@ -1454,12 +1758,24 @@ void decode_attention_cpu(
   void* v_buffer_data = v_buffer.data_ptr();
   const bool is_mla = (k_buffer_data == v_buffer_data) && (num_heads_kv == 1) && (head_size == head_size_v + 64);
 
-  // block length for k_buffer and v_buffer
-  constexpr int BLOCK_N = 256;
+  const int64_t max_seq_len = max_seq_len_in_batch(seq_lens.data_ptr<int64_t>(), num_seqs);
+  const int64_t block_n = choose_decode_block_n(is_mla, head_size, max_seq_len);
+  const bool use_grouped_packed = !is_mla &&
+      (num_heads != num_heads_kv) &&
+      use_grouped_packed_decode_kernel(num_seqs, num_heads, num_heads_kv, head_size, head_size_v, max_seq_len);
+  constexpr int64_t BLOCK_N_GQA = 256;
+  constexpr int64_t BLOCK_N_MLA = 128;
+  constexpr int64_t BLOCK_N_GQA_PACKED = 128;
+  constexpr int64_t BLOCK_H_GQA_PACKED = 8;
 
   // buffer for packing k_cache and v_cache
   int num_threads = at::get_num_threads();
-  int64_t size_per_thread = is_mla ? BLOCK_N * head_size + BLOCK_N * head_size_v : 0;
+  int64_t size_per_thread = 0;
+  if (is_mla) {
+    size_per_thread = block_n * (head_size + head_size_v);
+  } else if (use_grouped_packed) {
+    size_per_thread = BLOCK_N_GQA_PACKED * (head_size + head_size_v);
+  }
   auto buffer = at::empty({num_threads, size_per_thread}, k_buffer.options());
 
   AT_DISPATCH_REDUCED_FLOATING_TYPES(query.scalar_type(), "decode_attention_kernel", [&] {
@@ -1487,7 +1803,7 @@ void decode_attention_cpu(
 
       if (num_heads == num_heads_kv) {
         // MHA
-        decode_attention_kernel_impl<scalar_t, index_t, BLOCK_N>(
+        decode_attention_kernel_impl<scalar_t, index_t, BLOCK_N_GQA>(
             output.data_ptr<scalar_t>(),
             attn_logits.data_ptr<float>(),
             query.data_ptr<scalar_t>(),
@@ -1514,7 +1830,8 @@ void decode_attention_cpu(
             max_total_num_tokens);
       } else if (is_mla) {
         // MLA
-        decode_attention_mla_kernel_impl<scalar_t, index_t, BLOCK_N>(
+        TORCH_CHECK(block_n == BLOCK_N_MLA, "decode MLA: unsupported BLOCK_N ", block_n);
+        decode_attention_mla_kernel_impl<scalar_t, index_t, BLOCK_N_MLA>(
             output.data_ptr<scalar_t>(),
             attn_logits.data_ptr<float>(),
             query.data_ptr<scalar_t>(),
@@ -1542,33 +1859,64 @@ void decode_attention_cpu(
             max_total_num_tokens,
             size_per_thread);
       } else {
-        // GQA/MQA
-        decode_attention_grouped_kernel_impl<scalar_t, index_t, BLOCK_N>(
-            output.data_ptr<scalar_t>(),
-            attn_logits.data_ptr<float>(),
-            query.data_ptr<scalar_t>(),
-            (const scalar_t*)k_buffer_data,
-            (const scalar_t*)v_buffer_data,
-            req_to_token.data_ptr<index_t>(),
-            req_pool_indices.data_ptr<int64_t>(),
-            seq_lens.data_ptr<int64_t>(),
-            num_seqs,
-            num_heads,
-            num_heads_kv,
-            head_size,
-            head_size_v,
-            num_kv_splits,
-            q_strideM,
-            q_strideH,
-            k_strideN,
-            k_strideH,
-            v_strideN,
-            v_strideH,
-            sm_scale,
-            logit_cap,
-            max_num_reqs,
-            max_context_len,
-            max_total_num_tokens);
+        if (use_grouped_packed) {
+          decode_attention_grouped_packed_kernel_impl<scalar_t, index_t, BLOCK_H_GQA_PACKED, BLOCK_N_GQA_PACKED>(
+              output.data_ptr<scalar_t>(),
+              attn_logits.data_ptr<float>(),
+              query.data_ptr<scalar_t>(),
+              (const scalar_t*)k_buffer_data,
+              (const scalar_t*)v_buffer_data,
+              req_to_token.data_ptr<index_t>(),
+              req_pool_indices.data_ptr<int64_t>(),
+              seq_lens.data_ptr<int64_t>(),
+              buffer.data_ptr<scalar_t>(),
+              num_seqs,
+              num_heads,
+              num_heads_kv,
+              head_size,
+              head_size_v,
+              num_kv_splits,
+              q_strideM,
+              q_strideH,
+              k_strideN,
+              k_strideH,
+              v_strideN,
+              v_strideH,
+              sm_scale,
+              logit_cap,
+              max_num_reqs,
+              max_context_len,
+              max_total_num_tokens,
+              size_per_thread);
+        } else {
+          // Generic GQA/MQA
+          decode_attention_grouped_kernel_impl<scalar_t, index_t, BLOCK_N_GQA>(
+              output.data_ptr<scalar_t>(),
+              attn_logits.data_ptr<float>(),
+              query.data_ptr<scalar_t>(),
+              (const scalar_t*)k_buffer_data,
+              (const scalar_t*)v_buffer_data,
+              req_to_token.data_ptr<index_t>(),
+              req_pool_indices.data_ptr<int64_t>(),
+              seq_lens.data_ptr<int64_t>(),
+              num_seqs,
+              num_heads,
+              num_heads_kv,
+              head_size,
+              head_size_v,
+              num_kv_splits,
+              q_strideM,
+              q_strideH,
+              k_strideN,
+              k_strideH,
+              v_strideN,
+              v_strideH,
+              sm_scale,
+              logit_cap,
+              max_num_reqs,
+              max_context_len,
+              max_total_num_tokens);
+        }
       }
     });
   });
