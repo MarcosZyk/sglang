@@ -2039,34 +2039,6 @@ void decode_attention_cpu_tuned(
   constexpr int64_t BLOCK_N_MLA = 128;
   constexpr int64_t BLOCK_N_GQA_PACKED = 128;
 
-  constexpr int64_t MAX_BLOCK_H_GQA_PACKED = 16;
-  constexpr int64_t MAX_BLOCK_H_MLA_TUNED = 16;
-  if (use_grouped_packed) {
-    const int64_t num_groups = num_heads / num_heads_kv;
-    const int64_t block_size_h = div_up(num_groups, head_block_num);
-    TORCH_CHECK(
-        block_size_h > 0 && block_size_h <= MAX_BLOCK_H_GQA_PACKED,
-        "decode_tuned packed-GQA: derived head block size out of range, got ",
-        block_size_h,
-        " from num_groups=",
-        num_groups,
-        " and head_block_num=",
-        head_block_num,
-        ". Increase head_block_num.");
-  }
-  if (is_mla) {
-    const int64_t block_size_h = div_up(num_heads, head_block_num);
-    TORCH_CHECK(
-        block_size_h > 0 && block_size_h <= MAX_BLOCK_H_MLA_TUNED,
-        "decode_tuned MLA: derived head block size out of range, got ",
-        block_size_h,
-        " from num_heads=",
-        num_heads,
-        " and head_block_num=",
-        head_block_num,
-        ". Increase head_block_num.");
-  }
-
   // buffer for packing k_cache and v_cache
   int num_threads = at::get_num_threads();
   int64_t size_per_thread = 0;
