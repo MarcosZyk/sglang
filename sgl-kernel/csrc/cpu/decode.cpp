@@ -1135,11 +1135,22 @@ void decode_attention_mla_kernel_impl(
     int64_t max_num_reqs,
     int64_t max_context_len,
     int64_t max_total_num_tokens,
+    int64_t head_block_num,
     int64_t buffer_size_per_thread) {
   using Vec = at::vec::Vectorized<float>;
 
-  // block length for heads
-  const int64_t BLOCK_H = batches == 1 ? 6 : (batches > 16 ? 22 : 11);
+  // block size for heads (BLOCK_H), and number of blocks to parallel
+  int64_t BLOCK_H = 0;
+  int64_t num_blocks = 0;
+  if (head_block_num > 0) {
+    // tuned path: head_block_num means number of head blocks
+    num_blocks = head_block_num;
+    BLOCK_H = div_up(num_heads, num_blocks);
+  } else {
+    // legacy path used by decode_attention_cpu
+    BLOCK_H = (batches == 1 ? 6 : (batches > 16 ? 22 : 11));
+    num_blocks = div_up(num_heads, BLOCK_H);
+  }
 
   // strides
   const int64_t l_stride0 = num_heads * num_kv_splits * (head_size_v + 1);
@@ -1147,9 +1158,6 @@ void decode_attention_mla_kernel_impl(
   const int64_t l_stride2 = head_size_v + 1;
 
   TORCH_CHECK(logit_cap == 0.f, "decode MLA: expect no logit_cap.");
-
-  // partition the heads into blocks for parallel
-  const int64_t num_blocks = div_up(num_heads, BLOCK_H);
 
   // parallel on [batches, num_blocks, num_kv_splits]
   at::parallel_for(0, batches * num_blocks * num_kv_splits, 0, [&](int64_t begin, int64_t end) {
@@ -1303,7 +1311,7 @@ void decode_attention_mla_kernel_impl(
       output, attn_logits, batches, num_heads, head_size_v, num_kv_splits, l_stride1, l_stride2);
 }  // MLA
 
-template <typename scalar_t, typename index_t, int64_t BLOCK_H, int64_t BLOCK_N>
+template <typename scalar_t, typename index_t, int64_t BLOCK_N>
 void decode_attention_grouped_packed_kernel_impl(
     scalar_t* __restrict__ output,
     float* __restrict__ attn_logits,
@@ -1320,6 +1328,7 @@ void decode_attention_grouped_packed_kernel_impl(
     int64_t head_size,
     int64_t head_size_v,
     int64_t num_kv_splits,
+    int64_t head_block_num,
     int64_t q_strideM,
     int64_t q_strideH,
     int64_t k_strideN,
@@ -1342,7 +1351,9 @@ void decode_attention_grouped_packed_kernel_impl(
   float rlogit_cap = has_logit_cap ? 1 / logit_cap : 0.f;
 
   const int64_t num_groups = num_heads / num_heads_kv;
-  const int64_t num_blocks = div_up(num_groups, BLOCK_H);
+  // head_block_num is the number of Q-head blocks; derive runtime block size.
+  const int64_t num_blocks = head_block_num;
+  const int64_t BLOCK_H = div_up(num_groups, num_blocks);
 
   at::parallel_for(0, batches * num_heads_kv * num_blocks * num_kv_splits, 0, [&](int64_t begin, int64_t end) {
     int64_t bs{0}, head_kv_id{0}, block_id{0}, kv_id{0};
@@ -1766,7 +1777,6 @@ void decode_attention_cpu(
   constexpr int64_t BLOCK_N_GQA = 256;
   constexpr int64_t BLOCK_N_MLA = 128;
   constexpr int64_t BLOCK_N_GQA_PACKED = 128;
-  constexpr int64_t BLOCK_H_GQA_PACKED = 8;
 
   // buffer for packing k_cache and v_cache
   int num_threads = at::get_num_threads();
@@ -1857,10 +1867,11 @@ void decode_attention_cpu(
             max_num_reqs,
             max_context_len,
             max_total_num_tokens,
+            0,
             size_per_thread);
       } else {
         if (use_grouped_packed) {
-          decode_attention_grouped_packed_kernel_impl<scalar_t, index_t, BLOCK_H_GQA_PACKED, BLOCK_N_GQA_PACKED>(
+          decode_attention_grouped_packed_kernel_impl<scalar_t, index_t, BLOCK_N_GQA_PACKED>(
               output.data_ptr<scalar_t>(),
               attn_logits.data_ptr<float>(),
               query.data_ptr<scalar_t>(),
@@ -1876,6 +1887,296 @@ void decode_attention_cpu(
               head_size,
               head_size_v,
               num_kv_splits,
+              8,
+              q_strideM,
+              q_strideH,
+              k_strideN,
+              k_strideH,
+              v_strideN,
+              v_strideH,
+              sm_scale,
+              logit_cap,
+              max_num_reqs,
+              max_context_len,
+              max_total_num_tokens,
+              size_per_thread);
+        } else {
+          // Generic GQA/MQA
+          decode_attention_grouped_kernel_impl<scalar_t, index_t, BLOCK_N_GQA>(
+              output.data_ptr<scalar_t>(),
+              attn_logits.data_ptr<float>(),
+              query.data_ptr<scalar_t>(),
+              (const scalar_t*)k_buffer_data,
+              (const scalar_t*)v_buffer_data,
+              req_to_token.data_ptr<index_t>(),
+              req_pool_indices.data_ptr<int64_t>(),
+              seq_lens.data_ptr<int64_t>(),
+              num_seqs,
+              num_heads,
+              num_heads_kv,
+              head_size,
+              head_size_v,
+              num_kv_splits,
+              q_strideM,
+              q_strideH,
+              k_strideN,
+              k_strideH,
+              v_strideN,
+              v_strideH,
+              sm_scale,
+              logit_cap,
+              max_num_reqs,
+              max_context_len,
+              max_total_num_tokens);
+        }
+      }
+    });
+  });
+}
+
+void decode_attention_cpu_tuned(
+    at::Tensor& query,
+    at::Tensor& k_buffer,
+    at::Tensor& v_buffer,
+    at::Tensor& output,
+    at::Tensor& key,
+    at::Tensor& value,
+    at::Tensor& loc,
+    at::Tensor& attn_logits,
+    at::Tensor& req_to_token,
+    at::Tensor& req_pool_indices,
+    at::Tensor& seq_lens,
+    double sm_scale,
+    double logit_cap,
+    int64_t head_block_num,
+    int64_t num_kv_splits) {
+  RECORD_FUNCTION(
+      "sgl-kernel::decode_attention_cpu_tuned",
+      std::vector<c10::IValue>(
+          {query, output, k_buffer, v_buffer, attn_logits, req_to_token, req_pool_indices, seq_lens}));
+
+  CHECK_LAST_DIM_CONTIGUOUS_INPUT(query);
+  CHECK_LAST_DIM_CONTIGUOUS_INPUT(k_buffer);
+  CHECK_LAST_DIM_CONTIGUOUS_INPUT(v_buffer);
+  // for MLA, key and value shares the same storage and value could be non-contiguous
+  CHECK_LAST_DIM_CONTIGUOUS_INPUT(key);
+  CHECK_LAST_DIM_CONTIGUOUS_INPUT(value);
+  CHECK_DIM(3, query);
+  CHECK_DIM(3, k_buffer);
+  CHECK_DIM(3, v_buffer);
+  CHECK_DIM(3, key);
+  CHECK_DIM(3, value);
+  CHECK_DIM(1, loc);
+
+  TORCH_CHECK(head_block_num > 0, "decode_tuned: expect head_block_num > 0, got ", head_block_num);
+  TORCH_CHECK(num_kv_splits > 0, "decode_tuned: expect num_kv_splits > 0, got ", num_kv_splits);
+
+  int64_t num_seqs = seq_lens.size(0);
+  int64_t max_num_reqs = req_to_token.size(0);
+  int64_t max_context_len = req_to_token.size(1);
+  int64_t max_total_num_tokens = k_buffer.size(0);
+
+  int64_t num_heads = query.size(1);
+  int64_t num_heads_kv = k_buffer.size(1);
+  int64_t head_size = query.size(2);
+  int64_t head_size_v = v_buffer.size(2);
+  TORCH_CHECK(num_heads_kv > 0, "decode_tuned: expect num_heads_kv > 0, got ", num_heads_kv);
+  TORCH_CHECK(
+      num_heads % num_heads_kv == 0,
+      "decode_tuned: expect num_heads to be divisible by num_heads_kv, got ",
+      num_heads,
+      " and ",
+      num_heads_kv);
+
+  CHECK_EQ(loc.numel(), num_seqs);
+  CHECK_EQ(attn_logits.size(0), num_seqs);
+  CHECK_EQ(attn_logits.size(1), num_heads);
+  CHECK_EQ(attn_logits.size(2), num_kv_splits);
+  CHECK_EQ(attn_logits.size(3), head_size_v + 1);
+  CHECK_EQ(attn_logits.scalar_type(), at::kFloat);
+
+  // strides for query
+  int64_t q_strideM = query.stride(0);
+  int64_t q_strideH = query.stride(1);
+
+  // strides for k_buffer and v_buffer
+  int64_t k_strideN = k_buffer.stride(0);
+  int64_t k_strideH = k_buffer.stride(1);
+  int64_t v_strideN = v_buffer.stride(0);
+  int64_t v_strideH = v_buffer.stride(1);
+  // strides for new key and value
+  int64_t nk_strideN = key.stride(0);
+  int64_t nk_strideH = key.stride(1);
+  int64_t nv_strideN = value.stride(0);
+  int64_t nv_strideH = value.stride(1);
+
+  // check index data types
+  const auto index_dtype = req_to_token.scalar_type();
+  TORCH_CHECK(
+      index_dtype == at::kInt || index_dtype == at::kLong,
+      "decode_tuned: expect req_to_token to be int32 or int64, got ",
+      index_dtype);
+  TORCH_CHECK(
+      seq_lens.scalar_type() == at::kLong,
+      "decode_tuned: expect req_lens to be int64, got ",
+      seq_lens.scalar_type());
+  TORCH_CHECK(
+      req_pool_indices.scalar_type() == at::kLong,
+      "decode_tuned: expect req_pool_indices to be int64, got ",
+      req_pool_indices.scalar_type());
+
+  // check if we have MLA here
+  void* k_buffer_data = k_buffer.data_ptr();
+  void* v_buffer_data = v_buffer.data_ptr();
+  const bool is_mla = (k_buffer_data == v_buffer_data) && (num_heads_kv == 1) && (head_size == head_size_v + 64);
+
+  const int64_t max_seq_len = max_seq_len_in_batch(seq_lens.data_ptr<int64_t>(), num_seqs);
+  const int64_t block_n = choose_decode_block_n(is_mla, head_size, max_seq_len);
+  const bool use_grouped_packed = !is_mla &&
+      (num_heads != num_heads_kv) &&
+      use_grouped_packed_decode_kernel(num_seqs, num_heads, num_heads_kv, head_size, head_size_v, max_seq_len);
+  constexpr int64_t BLOCK_N_GQA = 256;
+  constexpr int64_t BLOCK_N_MLA = 128;
+  constexpr int64_t BLOCK_N_GQA_PACKED = 128;
+
+  constexpr int64_t MAX_BLOCK_H_GQA_PACKED = 16;
+  constexpr int64_t MAX_BLOCK_H_MLA_TUNED = 16;
+  if (use_grouped_packed) {
+    const int64_t num_groups = num_heads / num_heads_kv;
+    const int64_t block_size_h = div_up(num_groups, head_block_num);
+    TORCH_CHECK(
+        block_size_h > 0 && block_size_h <= MAX_BLOCK_H_GQA_PACKED,
+        "decode_tuned packed-GQA: derived head block size out of range, got ",
+        block_size_h,
+        " from num_groups=",
+        num_groups,
+        " and head_block_num=",
+        head_block_num,
+        ". Increase head_block_num.");
+  }
+  if (is_mla) {
+    const int64_t block_size_h = div_up(num_heads, head_block_num);
+    TORCH_CHECK(
+        block_size_h > 0 && block_size_h <= MAX_BLOCK_H_MLA_TUNED,
+        "decode_tuned MLA: derived head block size out of range, got ",
+        block_size_h,
+        " from num_heads=",
+        num_heads,
+        " and head_block_num=",
+        head_block_num,
+        ". Increase head_block_num.");
+  }
+
+  // buffer for packing k_cache and v_cache
+  int num_threads = at::get_num_threads();
+  int64_t size_per_thread = 0;
+  if (is_mla) {
+    size_per_thread = block_n * (head_size + head_size_v);
+  } else if (use_grouped_packed) {
+    size_per_thread = BLOCK_N_GQA_PACKED * (head_size + head_size_v);
+  }
+  auto buffer = at::empty({num_threads, size_per_thread}, k_buffer.options());
+
+  AT_DISPATCH_REDUCED_FLOATING_TYPES(query.scalar_type(), "decode_attention_tuned_kernel", [&] {
+    AT_DISPATCH_INDEX_TYPES(index_dtype, "decode_attention_tuned_indices", [&] {
+      // update the kv buffer
+      decode_set_kv_buffer(
+          (scalar_t*)k_buffer_data,
+          (scalar_t*)v_buffer_data,
+          key.data_ptr<scalar_t>(),
+          value.data_ptr<scalar_t>(),
+          loc.data_ptr<int64_t>(),
+          num_seqs,
+          num_heads_kv,
+          head_size,
+          head_size_v,
+          k_strideN,
+          k_strideH,
+          v_strideN,
+          v_strideH,
+          nk_strideN,
+          nk_strideH,
+          nv_strideN,
+          nv_strideH,
+          is_mla);
+
+      if (num_heads == num_heads_kv) {
+        // MHA
+        decode_attention_kernel_impl<scalar_t, index_t, BLOCK_N_GQA>(
+            output.data_ptr<scalar_t>(),
+            attn_logits.data_ptr<float>(),
+            query.data_ptr<scalar_t>(),
+            (const scalar_t*)k_buffer_data,
+            (const scalar_t*)v_buffer_data,
+            req_to_token.data_ptr<index_t>(),
+            req_pool_indices.data_ptr<int64_t>(),
+            seq_lens.data_ptr<int64_t>(),
+            num_seqs,
+            num_heads,
+            head_size,
+            head_size_v,
+            num_kv_splits,
+            q_strideM,
+            q_strideH,
+            k_strideN,
+            k_strideH,
+            v_strideN,
+            v_strideH,
+            sm_scale,
+            logit_cap,
+            max_num_reqs,
+            max_context_len,
+            max_total_num_tokens);
+      } else if (is_mla) {
+        // MLA
+        TORCH_CHECK(block_n == BLOCK_N_MLA, "decode_tuned MLA: unsupported BLOCK_N ", block_n);
+        decode_attention_mla_kernel_impl<scalar_t, index_t, BLOCK_N_MLA>(
+            output.data_ptr<scalar_t>(),
+            attn_logits.data_ptr<float>(),
+            query.data_ptr<scalar_t>(),
+            (const scalar_t*)k_buffer_data,
+            (const scalar_t*)v_buffer_data,
+            req_to_token.data_ptr<index_t>(),
+            req_pool_indices.data_ptr<int64_t>(),
+            seq_lens.data_ptr<int64_t>(),
+            buffer.data_ptr<scalar_t>(),
+            num_seqs,
+            num_heads,
+            head_size,
+            head_size_v,
+            num_kv_splits,
+            q_strideM,
+            q_strideH,
+            k_strideN,
+            k_strideH,
+            v_strideN,
+            v_strideH,
+            sm_scale,
+            logit_cap,
+            max_num_reqs,
+            max_context_len,
+            max_total_num_tokens,
+            head_block_num,
+            size_per_thread);
+      } else {
+        if (use_grouped_packed) {
+          decode_attention_grouped_packed_kernel_impl<scalar_t, index_t, BLOCK_N_GQA_PACKED>(
+              output.data_ptr<scalar_t>(),
+              attn_logits.data_ptr<float>(),
+              query.data_ptr<scalar_t>(),
+              (const scalar_t*)k_buffer_data,
+              (const scalar_t*)v_buffer_data,
+              req_to_token.data_ptr<index_t>(),
+              req_pool_indices.data_ptr<int64_t>(),
+              seq_lens.data_ptr<int64_t>(),
+              buffer.data_ptr<scalar_t>(),
+              num_seqs,
+              num_heads,
+              num_heads_kv,
+              head_size,
+              head_size_v,
+              num_kv_splits,
+              head_block_num,
               q_strideM,
               q_strideH,
               k_strideN,

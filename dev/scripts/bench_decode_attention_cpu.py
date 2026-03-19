@@ -84,6 +84,12 @@ def parse_args():
     parser.add_argument("--head-size-v", type=int, default=None)
     parser.add_argument("--seq-len", type=int, default=None)
     parser.add_argument("--num-kv-splits", type=int, default=None)
+    parser.add_argument(
+        "--head-block-num",
+        type=int,
+        default=8,
+        help="Number of Q-head blocks used by decode_attention_cpu_tuned for AMX GQA packed / MLA paths.",
+    )
     parser.add_argument("--dtype", type=str, choices=["bf16", "fp16"], default="bf16")
     parser.add_argument("--sm-scale", type=float, default=None)
     parser.add_argument("--logit-cap", type=float, default=0.0)
@@ -171,7 +177,7 @@ def make_decode_pool(shape, dtype, device, use_mla: bool) -> List[dict]:
 
 def run_invocations(pool):
     for tensors in pool:
-        torch.ops.sgl_kernel.decode_attention_cpu(
+        torch.ops.sgl_kernel.decode_attention_cpu_tuned(
             tensors["query"],
             tensors["k_buffer"],
             tensors["v_buffer"],
@@ -185,6 +191,8 @@ def run_invocations(pool):
             tensors["seq_lens"],
             tensors["sm_scale"],
             tensors["logit_cap"],
+            tensors["head_block_num"],
+            tensors["num_kv_splits"],
         )
 
 
@@ -237,15 +245,23 @@ def main():
     for tensors in pool:
         tensors["sm_scale"] = sm_scale
         tensors["logit_cap"] = logit_cap
+        tensors["head_block_num"] = args.head_block_num
+        tensors["num_kv_splits"] = shape["num_kv_splits"]
 
     if args.cpu_bind:
         print(f"Warmup round (unmeasured): {INVOCATIONS_PER_ROUND} invocations")
         with torch.inference_mode():
             run_invocations(pool)
 
+    if use_mla:
+        derived_head_block_size = (shape["num_heads"] + args.head_block_num - 1) // args.head_block_num
+    else:
+        derived_head_block_size = ((shape["num_heads"] // shape["num_kv_heads"]) + args.head_block_num - 1) // args.head_block_num
+
     print(
         "Config: "
         f"workload={args.workload} effective_layout={'mla' if use_mla else 'non-mla'} "
+        f"head_block_num={args.head_block_num} derived_head_block_size={derived_head_block_size} "
         f"preset={args.preset} B={shape['batch_size']} H={shape['num_heads']} HKV={shape['num_kv_heads']} "
         f"D={shape['head_size']} DV={shape['head_size_v']} L={shape['seq_len']} splits={shape['num_kv_splits']} "
         f"dtype={args.dtype}"
