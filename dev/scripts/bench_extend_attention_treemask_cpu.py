@@ -4,7 +4,7 @@ import math
 import sys
 import time
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
 
 import torch
 
@@ -116,7 +116,7 @@ def build_custom_mask(seq_lens: torch.Tensor, extend_seq_lens: torch.Tensor) -> 
     return torch.cat(masks, dim=0).contiguous()
 
 
-def make_tensors(shape, dtype, device):
+def make_treemask_bundle(shape, dtype, device):
     b = shape["batch_size"]
     hq = shape["num_heads"]
     hkv = shape["num_kv_heads"]
@@ -160,13 +160,30 @@ def make_tensors(shape, dtype, device):
         "extend_start_loc": extend_start_loc,
         "custom_mask": custom_mask,
         "max_len_extend": extend_len,
-        "tokens_per_call": total_extend_tokens,
     }
 
 
-def run_invocations(fn):
-    for _ in range(INVOCATIONS_PER_ROUND):
-        fn()
+def make_treemask_pool(shape, dtype, device) -> List[dict]:
+    return [make_treemask_bundle(shape=shape, dtype=dtype, device=device) for _ in range(INVOCATIONS_PER_ROUND)]
+
+
+def run_invocations(pool):
+    for tensors in pool:
+        torch.ops.sgl_kernel.extend_attention_treemask_cpu(
+            tensors["q_extend"],
+            tensors["o_extend"],
+            tensors["k_buffer"],
+            tensors["v_buffer"],
+            tensors["req_to_token"],
+            tensors["req_pool_indices"],
+            tensors["seq_lens"],
+            tensors["extend_seq_lens"],
+            tensors["extend_start_loc"],
+            tensors["custom_mask"],
+            tensors["max_len_extend"],
+            tensors["sm_scale"],
+            tensors["logit_cap"],
+        )
 
 
 def main():
@@ -186,29 +203,15 @@ def main():
         binding_info = torch.ops.sgl_kernel.init_cpu_threads_env(args.cpu_bind)
         print(binding_info, end="" if binding_info.endswith("\n") else "\n")
 
-    tensors = make_tensors(shape, dtype=dtype, device=device)
-
-    def invoke():
-        torch.ops.sgl_kernel.extend_attention_treemask_cpu(
-            tensors["q_extend"],
-            tensors["o_extend"],
-            tensors["k_buffer"],
-            tensors["v_buffer"],
-            tensors["req_to_token"],
-            tensors["req_pool_indices"],
-            tensors["seq_lens"],
-            tensors["extend_seq_lens"],
-            tensors["extend_start_loc"],
-            tensors["custom_mask"],
-            tensors["max_len_extend"],
-            sm_scale,
-            logit_cap,
-        )
+    pool = make_treemask_pool(shape=shape, dtype=dtype, device=device)
+    for tensors in pool:
+        tensors["sm_scale"] = sm_scale
+        tensors["logit_cap"] = logit_cap
 
     if args.cpu_bind:
         print(f"Warmup round (unmeasured): {INVOCATIONS_PER_ROUND} invocations")
         with torch.inference_mode():
-            run_invocations(invoke)
+            run_invocations(pool)
 
     print(
         "Config: "
@@ -225,7 +228,7 @@ def main():
     with torch.inference_mode():
         for r in range(NUM_ROUNDS):
             t0 = time.perf_counter()
-            run_invocations(invoke)
+            run_invocations(pool)
             dt = time.perf_counter() - t0
             round_times.append(dt)
             total_us = dt * 1e6

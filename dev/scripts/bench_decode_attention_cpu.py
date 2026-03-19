@@ -4,7 +4,7 @@ import math
 import sys
 import time
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
 
 import torch
 
@@ -41,6 +41,15 @@ PRESETS: Dict[str, Dict[str, int]] = {
         "seq_len": 1024,
         "num_kv_splits": 8,
     },
+    "mla": {
+        "batch_size": 1,
+        "num_heads": 22,
+        "num_kv_heads": 1,
+        "head_size": 576,
+        "head_size_v": 512,
+        "seq_len": 2048,
+        "num_kv_splits": 8,
+    },
 }
 
 
@@ -61,6 +70,13 @@ def percentile(values, q: float) -> float:
 def parse_args():
     parser = argparse.ArgumentParser("CPU decode_attention benchmark")
     parser.add_argument("--preset", type=str, default="tiny", choices=sorted(PRESETS.keys()))
+    parser.add_argument(
+        "--workload",
+        type=str,
+        choices=["auto", "mha", "gqa", "mla"],
+        default="auto",
+        help="Decode workload mode. 'mla' enforces shared K/V storage layout.",
+    )
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--num-heads", type=int, default=None)
     parser.add_argument("--num-kv-heads", type=int, default=None)
@@ -103,7 +119,7 @@ def validate_shape(shape):
     assert shape["num_kv_splits"] > 0
 
 
-def make_tensors(shape, dtype, device):
+def make_decode_bundle(shape, dtype, device, use_mla: bool):
     b = shape["batch_size"]
     hq = shape["num_heads"]
     hkv = shape["num_kv_heads"]
@@ -114,10 +130,16 @@ def make_tensors(shape, dtype, device):
 
     total_tokens = b * seq_len
     query = torch.randn((b, hq, d), dtype=dtype, device=device)
-    key = torch.randn((b, hkv, d), dtype=dtype, device=device)
-    value = torch.randn((b, hkv, dv), dtype=dtype, device=device)
-    k_buffer = torch.randn((total_tokens, hkv, d), dtype=dtype, device=device)
-    v_buffer = torch.randn((total_tokens, hkv, dv), dtype=dtype, device=device)
+    if use_mla:
+        k_buffer = torch.randn((total_tokens, hkv, d), dtype=dtype, device=device)
+        v_buffer = k_buffer.narrow(2, 0, dv)
+        key = torch.randn((b, hkv, d), dtype=dtype, device=device)
+        value = key.narrow(2, 0, dv)
+    else:
+        key = torch.randn((b, hkv, d), dtype=dtype, device=device)
+        value = torch.randn((b, hkv, dv), dtype=dtype, device=device)
+        k_buffer = torch.randn((total_tokens, hkv, d), dtype=dtype, device=device)
+        v_buffer = torch.randn((total_tokens, hkv, dv), dtype=dtype, device=device)
     output = torch.empty((b, hq, dv), dtype=dtype, device=device)
     loc = torch.randperm(total_tokens, device=device)[:b].to(torch.int64)
     attn_logits = torch.empty((b, hq, num_kv_splits, dv + 1), dtype=torch.float32, device=device)
@@ -137,13 +159,33 @@ def make_tensors(shape, dtype, device):
         "req_to_token": req_to_token,
         "req_pool_indices": req_pool_indices,
         "seq_lens": seq_lens,
-        "tokens_per_call": b,
     }
 
 
-def run_invocations(fn):
-    for _ in range(INVOCATIONS_PER_ROUND):
-        fn()
+def make_decode_pool(shape, dtype, device, use_mla: bool) -> List[dict]:
+    return [
+        make_decode_bundle(shape=shape, dtype=dtype, device=device, use_mla=use_mla)
+        for _ in range(INVOCATIONS_PER_ROUND)
+    ]
+
+
+def run_invocations(pool):
+    for tensors in pool:
+        torch.ops.sgl_kernel.decode_attention_cpu(
+            tensors["query"],
+            tensors["k_buffer"],
+            tensors["v_buffer"],
+            tensors["output"],
+            tensors["key"],
+            tensors["value"],
+            tensors["loc"],
+            tensors["attn_logits"],
+            tensors["req_to_token"],
+            tensors["req_pool_indices"],
+            tensors["seq_lens"],
+            tensors["sm_scale"],
+            tensors["logit_cap"],
+        )
 
 
 def main():
@@ -157,38 +199,53 @@ def main():
 
     sm_scale = args.sm_scale if args.sm_scale is not None else (1.0 / math.sqrt(shape["head_size"]))
     logit_cap = args.logit_cap
+    is_mla_shape = shape["num_kv_heads"] == 1 and shape["head_size"] == shape["head_size_v"] + 64
+
+    if args.workload == "auto":
+        use_mla = is_mla_shape
+    elif args.workload == "mla":
+        if not is_mla_shape:
+            raise ValueError(
+                "MLA mode requires num_kv_heads==1 and head_size==head_size_v+64, "
+                f"got num_kv_heads={shape['num_kv_heads']} head_size={shape['head_size']} head_size_v={shape['head_size_v']}"
+            )
+        if shape["num_heads"] == shape["num_kv_heads"]:
+            raise ValueError(
+                "MLA mode requires grouped-query setup (num_heads != num_kv_heads) "
+                "to enter the MLA kernel path."
+            )
+        use_mla = True
+    elif args.workload == "mha":
+        if shape["num_heads"] != shape["num_kv_heads"]:
+            raise ValueError(
+                f"MHA mode requires num_heads==num_kv_heads, got {shape['num_heads']} and {shape['num_kv_heads']}"
+            )
+        use_mla = False
+    else:  # gqa
+        if shape["num_heads"] <= shape["num_kv_heads"]:
+            raise ValueError(
+                f"GQA mode requires num_heads > num_kv_heads, got {shape['num_heads']} and {shape['num_kv_heads']}"
+            )
+        use_mla = False
 
     if args.cpu_bind:
         print(f"Applying CPU binding: {args.cpu_bind}")
         binding_info = torch.ops.sgl_kernel.init_cpu_threads_env(args.cpu_bind)
         print(binding_info, end="" if binding_info.endswith("\n") else "\n")
 
-    tensors = make_tensors(shape, dtype=dtype, device=device)
-
-    def invoke():
-        torch.ops.sgl_kernel.decode_attention_cpu(
-            tensors["query"],
-            tensors["k_buffer"],
-            tensors["v_buffer"],
-            tensors["output"],
-            tensors["key"],
-            tensors["value"],
-            tensors["loc"],
-            tensors["attn_logits"],
-            tensors["req_to_token"],
-            tensors["req_pool_indices"],
-            tensors["seq_lens"],
-            sm_scale,
-            logit_cap,
-        )
+    pool = make_decode_pool(shape=shape, dtype=dtype, device=device, use_mla=use_mla)
+    for tensors in pool:
+        tensors["sm_scale"] = sm_scale
+        tensors["logit_cap"] = logit_cap
 
     if args.cpu_bind:
         print(f"Warmup round (unmeasured): {INVOCATIONS_PER_ROUND} invocations")
         with torch.inference_mode():
-            run_invocations(invoke)
+            run_invocations(pool)
 
     print(
         "Config: "
+        f"workload={args.workload} effective_layout={'mla' if use_mla else 'non-mla'} "
         f"preset={args.preset} B={shape['batch_size']} H={shape['num_heads']} HKV={shape['num_kv_heads']} "
         f"D={shape['head_size']} DV={shape['head_size_v']} L={shape['seq_len']} splits={shape['num_kv_splits']} "
         f"dtype={args.dtype}"
@@ -202,7 +259,7 @@ def main():
     with torch.inference_mode():
         for r in range(NUM_ROUNDS):
             t0 = time.perf_counter()
-            run_invocations(invoke)
+            run_invocations(pool)
             dt = time.perf_counter() - t0
             round_times.append(dt)
             total_us = dt * 1e6
