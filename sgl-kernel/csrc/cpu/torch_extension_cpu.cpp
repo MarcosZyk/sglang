@@ -112,29 +112,6 @@ void extend_attention_treemask_cpu(
     double sm_scale,
     double logit_cap);
 
-void decode_attention_cpu_v2(
-    at::Tensor& query,
-    at::Tensor& k_cache,
-    at::Tensor& v_cache,
-    at::Tensor& output,
-    at::Tensor& key,
-    at::Tensor& value,
-    at::Tensor& loc,
-    at::Tensor& attn_logits,
-    at::Tensor& attn_logits_merged,
-    at::Tensor& req_to_token,
-    at::Tensor& req_pool_indices,
-    at::Tensor& seq_lens,
-    double sm_scale,
-    double logit_cap,
-    int64_t tp_rank,
-    int64_t tp_size,
-    int64_t kv_block_length);
-
-void decode_merge_attention_sp_cpu_v2(
-    at::Tensor& output,
-    at::Tensor& attn_logits);
-
 // weight prepack
 at::Tensor convert_weight_packed(at::Tensor& weight);
 
@@ -415,16 +392,6 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
       "Tensor v_buffer, Tensor req_to_token, Tensor req_pool_indices, Tensor seq_lens, Tensor extend_seq_lens, Tensor "
       "extend_start_loc, Tensor custom_mask, int max_len_extend, float sm_scale, float logit_cap) -> ()");
   m.impl("extend_attention_treemask_cpu", torch::kCPU, &extend_attention_treemask_cpu);
-
-  m.def(
-      "decode_attention_cpu_v2(Tensor query, Tensor k_cache, Tensor v_cahce, Tensor(a!) output, Tensor key, Tensor value, "
-      "Tensor loc, Tensor attn_logits, Tensor attn_logits_merged, Tensor req_to_token, Tensor req_pool_indices, Tensor seq_lens, float sm_scale, "
-      "float logit_cap, int tp_rank, int tp_size, int kv_block_length) -> ()");
-  m.impl("decode_attention_cpu_v2", torch::kCPU, &decode_attention_cpu_v2);
-
-  m.def(
-      "decode_merge_attention_sp_cpu_v2(Tensor(a!) output, Tensor attn_logits) -> ()");
-  m.impl("decode_merge_attention_sp_cpu_v2", torch::kCPU, &decode_merge_attention_sp_cpu_v2);
 
 
   // weight prepack
