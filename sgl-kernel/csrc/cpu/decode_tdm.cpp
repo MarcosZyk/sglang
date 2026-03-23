@@ -400,13 +400,13 @@ void decode_attention_mla_tdm_kernel_impl(
     int64_t max_total_num_tokens,
     int64_t buffer_size_per_thread) {
   using Vec = at::vec::Vectorized<float>;
-  UNUSED(max_total_num_tokens);
-  TORCH_CHECK(logit_cap == 0.f, "decode MLA: expect no logit_cap.");
 
   const int64_t l_stride0 = num_heads * num_kv_splits * (head_size_v + 1);
   const int64_t l_stride1 = num_kv_splits * (head_size_v + 1);
   const int64_t l_stride2 = head_size_v + 1;
   const int64_t num_worker_slots = num_blocks * num_kv_splits;
+
+  TORCH_CHECK(logit_cap == 0.f, "decode_tdm MLA: expect no logit_cap.");
 
   at::parallel_for(0, num_worker_slots, 0, [&](int64_t begin, int64_t end) {
     const int tid = at::get_thread_num();
@@ -573,7 +573,6 @@ void decode_attention_grouped_packed_tdm_kernel_impl(
     int64_t max_total_num_tokens,
     int64_t buffer_size_per_thread) {
   using Vec = at::vec::Vectorized<float>;
-  UNUSED(max_total_num_tokens);
 
   const int64_t l_stride0 = num_heads * num_kv_splits * (head_size_v + 1);
   const int64_t l_stride1 = num_kv_splits * (head_size_v + 1);
