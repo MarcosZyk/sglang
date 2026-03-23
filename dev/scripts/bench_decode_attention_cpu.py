@@ -71,6 +71,13 @@ def parse_args():
     parser = argparse.ArgumentParser("CPU decode_attention benchmark")
     parser.add_argument("--preset", type=str, default="tiny", choices=sorted(PRESETS.keys()))
     parser.add_argument(
+        "--strategy",
+        type=str,
+        choices=["sdm", "tdm"],
+        default="sdm",
+        help="Decode strategy: sdm uses decode_attention_cpu_tuned; tdm uses decode_attention_cpu_tdm with auto-derived num_kv_splits.",
+    )
+    parser.add_argument(
         "--workload",
         type=str,
         choices=["auto", "mha", "gqa", "mla"],
@@ -88,7 +95,7 @@ def parse_args():
         "--head-block-num",
         type=int,
         default=8,
-        help="Number of Q-head blocks used by decode_attention_cpu_tuned for AMX GQA packed / MLA paths.",
+        help="Number of Q-head blocks for tuned decode strategies (sdm/tdm).",
     )
     parser.add_argument("--dtype", type=str, choices=["bf16", "fp16"], default="bf16")
     parser.add_argument("--sm-scale", type=float, default=None)
@@ -177,23 +184,41 @@ def make_decode_pool(shape, dtype, device, use_mla: bool) -> List[dict]:
 
 def run_invocations(pool):
     for tensors in pool:
-        torch.ops.sgl_kernel.decode_attention_cpu_tuned(
-            tensors["query"],
-            tensors["k_buffer"],
-            tensors["v_buffer"],
-            tensors["output"],
-            tensors["key"],
-            tensors["value"],
-            tensors["loc"],
-            tensors["attn_logits"],
-            tensors["req_to_token"],
-            tensors["req_pool_indices"],
-            tensors["seq_lens"],
-            tensors["sm_scale"],
-            tensors["logit_cap"],
-            tensors["head_block_num"],
-            tensors["num_kv_splits"],
-        )
+        if tensors["strategy"] == "tdm":
+            torch.ops.sgl_kernel.decode_attention_cpu_tdm(
+                tensors["query"],
+                tensors["k_buffer"],
+                tensors["v_buffer"],
+                tensors["output"],
+                tensors["key"],
+                tensors["value"],
+                tensors["loc"],
+                tensors["attn_logits"],
+                tensors["req_to_token"],
+                tensors["req_pool_indices"],
+                tensors["seq_lens"],
+                tensors["sm_scale"],
+                tensors["logit_cap"],
+                tensors["head_block_num"],
+            )
+        else:
+            torch.ops.sgl_kernel.decode_attention_cpu_tuned(
+                tensors["query"],
+                tensors["k_buffer"],
+                tensors["v_buffer"],
+                tensors["output"],
+                tensors["key"],
+                tensors["value"],
+                tensors["loc"],
+                tensors["attn_logits"],
+                tensors["req_to_token"],
+                tensors["req_pool_indices"],
+                tensors["seq_lens"],
+                tensors["sm_scale"],
+                tensors["logit_cap"],
+                tensors["head_block_num"],
+                tensors["num_kv_splits"],
+            )
 
 
 def main():
@@ -241,12 +266,28 @@ def main():
         binding_info = torch.ops.sgl_kernel.init_cpu_threads_env(args.cpu_bind)
         print(binding_info, end="" if binding_info.endswith("\n") else "\n")
 
+    if args.strategy == "tdm":
+        num_threads = torch.get_num_threads()
+        if num_threads <= 0:
+            raise ValueError(f"TDM expects num_threads > 0, got {num_threads}")
+        if num_threads % args.head_block_num != 0:
+            raise ValueError(
+                f"TDM expects num_threads % head_block_num == 0, got num_threads={num_threads}, "
+                f"head_block_num={args.head_block_num}"
+            )
+        derived_num_kv_splits = num_threads // args.head_block_num
+        shape["num_kv_splits"] = derived_num_kv_splits
+    else:
+        num_threads = torch.get_num_threads()
+        derived_num_kv_splits = None
+
     pool = make_decode_pool(shape=shape, dtype=dtype, device=device, use_mla=use_mla)
     for tensors in pool:
         tensors["sm_scale"] = sm_scale
         tensors["logit_cap"] = logit_cap
         tensors["head_block_num"] = args.head_block_num
         tensors["num_kv_splits"] = shape["num_kv_splits"]
+        tensors["strategy"] = args.strategy
 
     if args.cpu_bind:
         print(f"Warmup round (unmeasured): {INVOCATIONS_PER_ROUND} invocations")
@@ -260,12 +301,14 @@ def main():
 
     print(
         "Config: "
-        f"workload={args.workload} effective_layout={'mla' if use_mla else 'non-mla'} "
+        f"strategy={args.strategy} workload={args.workload} effective_layout={'mla' if use_mla else 'non-mla'} "
         f"head_block_num={args.head_block_num} derived_head_block_size={derived_head_block_size} "
         f"preset={args.preset} B={shape['batch_size']} H={shape['num_heads']} HKV={shape['num_kv_heads']} "
         f"D={shape['head_size']} DV={shape['head_size_v']} L={shape['seq_len']} splits={shape['num_kv_splits']} "
         f"dtype={args.dtype}"
     )
+    if args.strategy == "tdm":
+        print(f"TDM derived_num_kv_splits={derived_num_kv_splits} num_threads={num_threads}")
     print(f"Measured rounds={NUM_ROUNDS}, invocations_per_round={INVOCATIONS_PER_ROUND}")
 
     round_times = []

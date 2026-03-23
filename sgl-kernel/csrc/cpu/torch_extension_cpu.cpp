@@ -98,6 +98,22 @@ void decode_attention_cpu_tuned(
     int64_t head_block_num,
     int64_t num_kv_splits);
 
+void decode_attention_cpu_tdm(
+    at::Tensor& query,
+    at::Tensor& k_cache,
+    at::Tensor& v_cache,
+    at::Tensor& output,
+    at::Tensor& key,
+    at::Tensor& value,
+    at::Tensor& loc,
+    at::Tensor& attn_logits,
+    at::Tensor& req_to_token,
+    at::Tensor& req_pool_indices,
+    at::Tensor& seq_lens,
+    double sm_scale,
+    double logit_cap,
+    int64_t head_block_num);
+
 void extend_attention_cpu(
     at::Tensor& q_extend,
     at::Tensor& k_extend,
@@ -400,6 +416,11 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
       "Tensor loc, Tensor attn_logits, Tensor req_to_token, Tensor req_pool_indices, Tensor seq_lens, float sm_scale, "
       "float logit_cap, int head_block_num, int num_kv_splits) -> ()");
   m.impl("decode_attention_cpu_tuned", torch::kCPU, &decode_attention_cpu_tuned);
+  m.def(
+      "decode_attention_cpu_tdm(Tensor query, Tensor k_cache, Tensor v_cahce, Tensor(a!) output, Tensor key, Tensor value, "
+      "Tensor loc, Tensor attn_logits, Tensor req_to_token, Tensor req_pool_indices, Tensor seq_lens, float sm_scale, "
+      "float logit_cap, int head_block_num) -> ()");
+  m.impl("decode_attention_cpu_tdm", torch::kCPU, &decode_attention_cpu_tdm);
 
   // extend
   m.def(
