@@ -198,6 +198,7 @@ inline void fill_stub(scalar_t* __restrict__ out, float val, int64_t size) {
   constexpr int kVecSize = Vec::size();
   const Vec data_vec = Vec(static_cast<scalar_t>(val));
   int64_t d = 0;
+#pragma GCC unroll 4
   for (; d <= size - kVecSize; d += kVecSize) {
     data_vec.store(out + d);
   }
@@ -213,6 +214,7 @@ inline void copy_stub(scalar_t* __restrict__ out, const float* __restrict__ acc,
   constexpr int kVecSize = bVec::size();
   const fVec s_fvec = fVec(s);
   int64_t d = 0;
+#pragma GCC unroll 4
   for (; d <= size - kVecSize; d += kVecSize) {
     fVec a_fvec0 = fVec::loadu(acc + d) * s_fvec;
     fVec a_fvec1 = fVec::loadu(acc + d + fVec::size()) * s_fvec;
@@ -229,6 +231,7 @@ inline void copy_stub(scalar_t* __restrict__ out, const scalar_t* __restrict__ s
   using bVec = at::vec::Vectorized<scalar_t>;
   constexpr int kVecSize = bVec::size();
   int64_t d = 0;
+#pragma GCC unroll 4
   for (; d <= size - kVecSize; d += kVecSize) {
     bVec out_bvec = bVec::loadu(src + d);
     out_bvec.store(out + d);
@@ -368,18 +371,7 @@ void decode_accumulate_kv_splits(
   });
 }
 
-template <typename index_t>
-inline void check_indices_in_bounds(
-    const index_t* __restrict__ indices,
-    int64_t n_size,
-    int64_t max_total_num_tokens) {
-  for (int64_t i = 0; i < n_size; ++i) {
-    int64_t idx = static_cast<int64_t>(indices[i]);
-    TORCH_CHECK(idx >= 0 && idx < max_total_num_tokens, "token index out of scope!");
-  }
-}
-
-template <typename scalar_t, typename index_t, int64_t BLOCK_N, int64_t MAX_BLOCK_H>
+template <typename scalar_t, typename index_t, int64_t BLOCK_N>
 void decode_attention_mla_tdm_kernel_impl(
     scalar_t* __restrict__ output,
     float* __restrict__ attn_logits,
@@ -408,8 +400,8 @@ void decode_attention_mla_tdm_kernel_impl(
     int64_t max_total_num_tokens,
     int64_t buffer_size_per_thread) {
   using Vec = at::vec::Vectorized<float>;
-
-  TORCH_CHECK(logit_cap == 0.f, "decode_tdm MLA: expect no logit_cap.");
+  UNUSED(max_total_num_tokens);
+  TORCH_CHECK(logit_cap == 0.f, "decode MLA: expect no logit_cap.");
 
   const int64_t l_stride0 = num_heads * num_kv_splits * (head_size_v + 1);
   const int64_t l_stride1 = num_kv_splits * (head_size_v + 1);
@@ -422,12 +414,12 @@ void decode_attention_mla_tdm_kernel_impl(
     scalar_t* __restrict__ Btmp1 = Btmp0 + BLOCK_N * head_size;
     fill_stub(Btmp1, 0.f, BLOCK_N * head_size_v);
 
-    alignas(64) float s_i[MAX_BLOCK_H * BLOCK_N];
+    alignas(64) float s_i[block_size_h * BLOCK_N];
     float* __restrict__ s_delta = s_i;
-    alignas(64) scalar_t s_delta2[MAX_BLOCK_H * BLOCK_N];
-    alignas(64) float s_prime[MAX_BLOCK_H];
-    alignas(64) float m_prime[MAX_BLOCK_H];
-    alignas(64) float m_delta[MAX_BLOCK_H];
+    alignas(64) scalar_t s_delta2[block_size_h * BLOCK_N];
+    alignas(64) float s_prime[block_size_h];
+    alignas(64) float m_prime[block_size_h];
+    alignas(64) float m_delta[block_size_h];
 
     for (int64_t slot = begin; slot < end; ++slot) {
       const int64_t block_id = slot / num_kv_splits;
@@ -444,14 +436,14 @@ void decode_attention_mla_tdm_kernel_impl(
         const int64_t seq_len_kv = seq_lens[bs];
         const int64_t req_pool_id = req_pool_indices[bs];
         TORCH_CHECK(seq_len_kv <= max_context_len, "seq_len_kv out of scope!");
-        TORCH_CHECK(req_pool_id >= 0 && req_pool_id < max_num_reqs, "req_pool_id out of scope!");
+        TORCH_CHECK(req_pool_id < max_num_reqs, "req_pool_id out of scope!");
 
         const int64_t split_size = div_up(seq_len_kv, num_kv_splits);
         const int64_t kv_start = kv_id * split_size;
         const int64_t kv_end = std::min(kv_start + split_size, seq_len_kv);
 
-        fill_stub(s_prime, 0.f, h_size);
-        fill_stub(m_prime, -std::numeric_limits<float>::infinity(), h_size);
+        fill_stub(s_prime, 0.f, block_size_h);
+        fill_stub(m_prime, -std::numeric_limits<float>::infinity(), block_size_h);
 
         float* __restrict__ v_prime = attn_logits + bs * l_stride0 + h_start * l_stride1 + kv_id * l_stride2;
         for (int64_t h = 0; h < h_size; ++h) {
@@ -462,7 +454,6 @@ void decode_attention_mla_tdm_kernel_impl(
           const int64_t n_size = std::min(BLOCK_N, kv_end - n);
           const int64_t padded_n_size = div_up(int(n_size), TILE_K) * TILE_K;
           const index_t* __restrict__ indices = req_to_token + req_pool_id * max_context_len + n;
-          check_indices_in_bounds(indices, n_size, max_total_num_tokens);
 
           pack_vnni<scalar_t, index_t>(
               Btmp0,
@@ -550,7 +541,7 @@ void decode_attention_mla_tdm_kernel_impl(
       output, attn_logits, batches, num_heads, head_size_v, num_kv_splits, l_stride1, l_stride2);
 }
 
-template <typename scalar_t, typename index_t, int64_t BLOCK_N, int64_t MAX_BLOCK_H>
+template <typename scalar_t, typename index_t, int64_t BLOCK_N>
 void decode_attention_grouped_packed_tdm_kernel_impl(
     scalar_t* __restrict__ output,
     float* __restrict__ attn_logits,
@@ -582,6 +573,7 @@ void decode_attention_grouped_packed_tdm_kernel_impl(
     int64_t max_total_num_tokens,
     int64_t buffer_size_per_thread) {
   using Vec = at::vec::Vectorized<float>;
+  UNUSED(max_total_num_tokens);
 
   const int64_t l_stride0 = num_heads * num_kv_splits * (head_size_v + 1);
   const int64_t l_stride1 = num_kv_splits * (head_size_v + 1);
@@ -597,12 +589,12 @@ void decode_attention_grouped_packed_tdm_kernel_impl(
     scalar_t* __restrict__ Btmp1 = Btmp0 + BLOCK_N * head_size;
     fill_stub(Btmp1, 0.f, BLOCK_N * head_size_v);
 
-    alignas(64) float s_i[MAX_BLOCK_H * BLOCK_N];
+    alignas(64) float s_i[block_size_h * BLOCK_N];
     float* __restrict__ s_delta = s_i;
-    alignas(64) scalar_t s_delta2[MAX_BLOCK_H * BLOCK_N];
-    alignas(64) float s_prime[MAX_BLOCK_H];
-    alignas(64) float m_prime[MAX_BLOCK_H];
-    alignas(64) float m_delta[MAX_BLOCK_H];
+    alignas(64) scalar_t s_delta2[block_size_h * BLOCK_N];
+    alignas(64) float s_prime[block_size_h];
+    alignas(64) float m_prime[block_size_h];
+    alignas(64) float m_delta[block_size_h];
 
     for (int64_t slot = begin; slot < end; ++slot) {
       const int64_t block_id = slot / num_kv_splits;
@@ -611,7 +603,7 @@ void decode_attention_grouped_packed_tdm_kernel_impl(
         const int64_t seq_len_kv = seq_lens[bs];
         const int64_t req_pool_id = req_pool_indices[bs];
         TORCH_CHECK(seq_len_kv <= max_context_len, "seq_len_kv out of scope!");
-        TORCH_CHECK(req_pool_id >= 0 && req_pool_id < max_num_reqs, "req_pool_id out of scope!");
+        TORCH_CHECK(req_pool_id < max_num_reqs, "req_pool_id out of scope!");
 
         const int64_t split_size = div_up(seq_len_kv, num_kv_splits);
         const int64_t kv_start = kv_id * split_size;
@@ -626,8 +618,8 @@ void decode_attention_grouped_packed_tdm_kernel_impl(
           }
 
           const scalar_t* __restrict__ q_ptr = query + bs * q_strideM + h_start * q_strideH;
-          fill_stub(s_prime, 0.f, h_size);
-          fill_stub(m_prime, -std::numeric_limits<float>::infinity(), h_size);
+          fill_stub(s_prime, 0.f, block_size_h);
+          fill_stub(m_prime, -std::numeric_limits<float>::infinity(), block_size_h);
 
           float* __restrict__ v_prime = attn_logits + bs * l_stride0 + h_start * l_stride1 + kv_id * l_stride2;
           for (int64_t h = 0; h < h_size; ++h) {
@@ -638,7 +630,6 @@ void decode_attention_grouped_packed_tdm_kernel_impl(
             const int64_t n_size = std::min(BLOCK_N, kv_end - n);
             const int64_t padded_n_size = div_up(int(n_size), TILE_K) * TILE_K;
             const index_t* __restrict__ indices = req_to_token + req_pool_id * max_context_len + n;
-            check_indices_in_bounds(indices, n_size, max_total_num_tokens);
 
             pack_vnni<scalar_t, index_t>(
                 Btmp0,
@@ -738,7 +729,7 @@ void decode_attention_grouped_packed_tdm_kernel_impl(
             }
           }
         }
-      }
+      }  // slot
     }
     at::native::cpublas::brgemm_release();
   });
@@ -858,8 +849,6 @@ void decode_attention_cpu_tdm(
 
   constexpr int64_t BLOCK_N_MLA = 128;
   constexpr int64_t BLOCK_N_GQA_PACKED = 128;
-  constexpr int64_t MAX_BLOCK_H = 16;
-
   if (is_mla) {
     TORCH_CHECK(block_n == BLOCK_N_MLA, "decode_tdm MLA: unsupported BLOCK_N ", block_n);
   }
@@ -883,14 +872,6 @@ void decode_attention_cpu_tdm(
     const int64_t num_groups = num_heads / num_heads_kv;
     block_size_h = div_up(num_groups, num_blocks);
   }
-  TORCH_CHECK(
-      block_size_h <= MAX_BLOCK_H,
-      "decode_tdm: derived block_size_h (",
-      block_size_h,
-      ") exceeds MAX_BLOCK_H=",
-      MAX_BLOCK_H,
-      ". Please increase head_block_num.");
-
   const int64_t size_per_thread = (is_mla ? BLOCK_N_MLA : BLOCK_N_GQA_PACKED) * (head_size + head_size_v);
   auto buffer = at::empty({num_threads, size_per_thread}, k_cache.options());
 
@@ -917,7 +898,7 @@ void decode_attention_cpu_tdm(
           is_mla);
 
       if (is_mla) {
-        decode_attention_mla_tdm_kernel_impl<scalar_t, index_t, BLOCK_N_MLA, MAX_BLOCK_H>(
+        decode_attention_mla_tdm_kernel_impl<scalar_t, index_t, BLOCK_N_MLA>(
             output.data_ptr<scalar_t>(),
             attn_logits.data_ptr<float>(),
             query.data_ptr<scalar_t>(),
@@ -945,7 +926,7 @@ void decode_attention_cpu_tdm(
             max_total_num_tokens,
             size_per_thread);
       } else {
-        decode_attention_grouped_packed_tdm_kernel_impl<scalar_t, index_t, BLOCK_N_GQA_PACKED, MAX_BLOCK_H>(
+        decode_attention_grouped_packed_tdm_kernel_impl<scalar_t, index_t, BLOCK_N_GQA_PACKED>(
             output.data_ptr<scalar_t>(),
             attn_logits.data_ptr<float>(),
             query.data_ptr<scalar_t>(),
