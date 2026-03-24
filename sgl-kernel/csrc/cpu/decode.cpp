@@ -1,4 +1,5 @@
 #include "common.h"
+#include "decode_timer.h"
 #include "gemm.h"
 #include "vec.h"
 
@@ -1108,7 +1109,7 @@ void decode_attention_kernel_impl(
       output, attn_logits, batches, num_heads, head_size_v, num_kv_splits, l_stride1, l_stride2);
 }  // MHA
 
-template <typename scalar_t, typename index_t, int64_t BLOCK_N>
+template <typename scalar_t, typename index_t, int64_t BLOCK_N, bool kEnableTimer>
 void decode_attention_mla_kernel_impl(
     scalar_t* __restrict__ output,
     float* __restrict__ attn_logits,
@@ -1161,29 +1162,30 @@ void decode_attention_mla_kernel_impl(
 
   // parallel on [batches, num_blocks, num_kv_splits]
   at::parallel_for(0, batches * num_blocks * num_kv_splits, 0, [&](int64_t begin, int64_t end) {
-    int64_t bs{0}, block_id{0}, kv_id{0};
-    data_index_init(begin, bs, batches, block_id, num_blocks, kv_id, num_kv_splits);
+      const int tid = at::get_thread_num();
+      decode_timer::ScopedStageTimer<kEnableTimer> thread_timer(decode_timer::Stage::kThreadTotal, tid);
+      int64_t bs{0}, block_id{0}, kv_id{0};
+      data_index_init(begin, bs, batches, block_id, num_blocks, kv_id, num_kv_splits);
 
-    int tid = at::get_thread_num();
-    scalar_t* __restrict__ Btmp0 = buffer + tid * buffer_size_per_thread;
-    scalar_t* __restrict__ Btmp1 = Btmp0 + BLOCK_N * head_size;
+      scalar_t* __restrict__ Btmp0 = buffer + tid * buffer_size_per_thread;
+      scalar_t* __restrict__ Btmp1 = Btmp0 + BLOCK_N * head_size;
 
-    // init Btmp1 just once for each thread to prevent NaN
-    // Btmp0 is not needed as it computes full K every single time
-    fill_stub(Btmp1, 0.f, BLOCK_N * head_size_v);
+      // init Btmp1 just once for each thread to prevent NaN
+      // Btmp0 is not needed as it computes full K every single time
+      fill_stub(Btmp1, 0.f, BLOCK_N * head_size_v);
 
-    alignas(64) float s_i[BLOCK_H * BLOCK_N];
-    float* __restrict__ s_delta = s_i;
-    alignas(64) scalar_t s_delta2[BLOCK_H * BLOCK_N];
+      alignas(64) float s_i[BLOCK_H * BLOCK_N];
+      float* __restrict__ s_delta = s_i;
+      alignas(64) scalar_t s_delta2[BLOCK_H * BLOCK_N];
 
-    alignas(64) float s_prime[BLOCK_H];
-    alignas(64) float m_prime[BLOCK_H];
-    alignas(64) float m_delta[BLOCK_H];
+      alignas(64) float s_prime[BLOCK_H];
+      alignas(64) float m_prime[BLOCK_H];
+      alignas(64) float m_delta[BLOCK_H];
 
     for (int64_t i = begin; i < end; ++i) {
-      const int64_t h_start = block_id * BLOCK_H;
-      const int64_t h_end = std::min(block_id * BLOCK_H + BLOCK_H, num_heads);
-      const int64_t h_size = h_end - h_start;
+        const int64_t h_start = block_id * BLOCK_H;
+        const int64_t h_end = std::min(block_id * BLOCK_H + BLOCK_H, num_heads);
+        const int64_t h_size = h_end - h_start;
 
       // get query
       const scalar_t* __restrict__ q_ptr = query + bs * q_strideM + h_start * q_strideH;
@@ -1208,21 +1210,29 @@ void decode_attention_mla_kernel_impl(
 
       // loop over K and V sequence with BLOCK_N
       for (int64_t n = kv_start; n < kv_end; n += BLOCK_N) {
+        decode_timer::ScopedStageTimer<kEnableTimer> attn_timer(
+            decode_timer::Stage::kAttnCompute,
+            /*tid=*/tid);
         int64_t n_size = std::min(BLOCK_N, kv_end - n);
         const int64_t padded_n_size = div_up(int(n_size), TILE_K) * TILE_K;
 
         // get key and pack
-        pack_vnni<scalar_t, index_t>(
-            /*    dst0 */ Btmp0,
-            /*    dst1 */ Btmp1,
-            /*     src */ k_buffer + /* head_kv_id */ 0 * k_strideH,
-            /*     ind */ req_to_token + req_pool_id * max_context_len + n,
-            /*       N */ n_size,
-            /*       K */ head_size,
-            /*      Kv */ head_size_v,
-            /*  ld_src */ k_strideN,
-            /* ld_dst0 */ BLOCK_N,
-            /* ld_dst1 */ head_size_v);
+        {
+          decode_timer::ScopedStageTimer<kEnableTimer> kv_pack_timer(
+              decode_timer::Stage::kKvPackMla,
+              /*tid=*/tid);
+          pack_vnni<scalar_t, index_t>(
+              /*    dst0 */ Btmp0,
+              /*    dst1 */ Btmp1,
+              /*     src */ k_buffer + /* head_kv_id */ 0 * k_strideH,
+              /*     ind */ req_to_token + req_pool_id * max_context_len + n,
+              /*       N */ n_size,
+              /*       K */ head_size,
+              /*      Kv */ head_size_v,
+              /*  ld_src */ k_strideN,
+              /* ld_dst0 */ BLOCK_N,
+              /* ld_dst1 */ head_size_v);
+        }
 
         // calculate s_i <- Q @ K
         at::native::cpublas::brgemm(
@@ -1307,11 +1317,16 @@ void decode_attention_mla_kernel_impl(
     at::native::cpublas::brgemm_release();
   });
 
-  decode_accumulate_kv_splits(
-      output, attn_logits, batches, num_heads, head_size_v, num_kv_splits, l_stride1, l_stride2);
+  {
+    decode_timer::ScopedStageTimer<kEnableTimer> logits_timer(
+        decode_timer::Stage::kLogitsAccum,
+        /*tid=*/0);
+    decode_accumulate_kv_splits(
+        output, attn_logits, batches, num_heads, head_size_v, num_kv_splits, l_stride1, l_stride2);
+  }
 }  // MLA
 
-template <typename scalar_t, typename index_t, int64_t BLOCK_N>
+template <typename scalar_t, typename index_t, int64_t BLOCK_N, bool kEnableTimer>
 void decode_attention_grouped_packed_kernel_impl(
     scalar_t* __restrict__ output,
     float* __restrict__ attn_logits,
@@ -1356,26 +1371,27 @@ void decode_attention_grouped_packed_kernel_impl(
   const int64_t BLOCK_H = div_up(num_groups, num_blocks);
 
   at::parallel_for(0, batches * num_heads_kv * num_blocks * num_kv_splits, 0, [&](int64_t begin, int64_t end) {
-    int64_t bs{0}, head_kv_id{0}, block_id{0}, kv_id{0};
-    data_index_init(begin, bs, batches, head_kv_id, num_heads_kv, block_id, num_blocks, kv_id, num_kv_splits);
+      int64_t bs{0}, head_kv_id{0}, block_id{0}, kv_id{0};
+      data_index_init(begin, bs, batches, head_kv_id, num_heads_kv, block_id, num_blocks, kv_id, num_kv_splits);
 
-    int tid = at::get_thread_num();
-    scalar_t* __restrict__ Btmp0 = buffer + tid * buffer_size_per_thread;
-    scalar_t* __restrict__ Btmp1 = Btmp0 + BLOCK_N * head_size;
-    fill_stub(Btmp1, 0.f, BLOCK_N * head_size_v);
+      const int tid = at::get_thread_num();
+      decode_timer::ScopedStageTimer<kEnableTimer> thread_timer(decode_timer::Stage::kThreadTotal, tid);
+      scalar_t* __restrict__ Btmp0 = buffer + tid * buffer_size_per_thread;
+      scalar_t* __restrict__ Btmp1 = Btmp0 + BLOCK_N * head_size;
+      fill_stub(Btmp1, 0.f, BLOCK_N * head_size_v);
 
-    alignas(64) float s_i[BLOCK_H * BLOCK_N];
-    float* __restrict__ s_delta = s_i;
-    alignas(64) scalar_t s_delta2[BLOCK_H * BLOCK_N];
+      alignas(64) float s_i[BLOCK_H * BLOCK_N];
+      float* __restrict__ s_delta = s_i;
+      alignas(64) scalar_t s_delta2[BLOCK_H * BLOCK_N];
 
-    alignas(64) float s_prime[BLOCK_H];
-    alignas(64) float m_prime[BLOCK_H];
-    alignas(64) float m_delta[BLOCK_H];
+      alignas(64) float s_prime[BLOCK_H];
+      alignas(64) float m_prime[BLOCK_H];
+      alignas(64) float m_delta[BLOCK_H];
 
     for (int64_t i = begin; i < end; ++i) {
-      const int64_t h_start = head_kv_id * num_groups + block_id * BLOCK_H;
-      const int64_t h_end = head_kv_id * num_groups + std::min(block_id * BLOCK_H + BLOCK_H, num_groups);
-      const int64_t h_size = h_end - h_start;
+        const int64_t h_start = head_kv_id * num_groups + block_id * BLOCK_H;
+        const int64_t h_end = head_kv_id * num_groups + std::min(block_id * BLOCK_H + BLOCK_H, num_groups);
+        const int64_t h_size = h_end - h_start;
 
       const scalar_t* __restrict__ q_ptr = query + bs * q_strideM + h_start * q_strideH;
 
@@ -1397,21 +1413,29 @@ void decode_attention_grouped_packed_kernel_impl(
       }
 
       for (int64_t n = kv_start; n < kv_end; n += BLOCK_N) {
+        decode_timer::ScopedStageTimer<kEnableTimer> attn_timer(
+            decode_timer::Stage::kAttnCompute,
+            /*tid=*/tid);
         int64_t n_size = std::min(BLOCK_N, kv_end - n);
         const int64_t padded_n_size = div_up(int(n_size), TILE_K) * TILE_K;
         const index_t* __restrict__ indices = req_to_token + req_pool_id * max_context_len + n;
 
-        pack_vnni<scalar_t, index_t>(
-            /*    dst0 */ Btmp0,
-            /*    dst1 */ Btmp1,
-            /*     src */ k_buffer + head_kv_id * k_strideH,
-            /*     ind */ indices,
-            /*       N */ n_size,
-            /*       K */ head_size,
-            /*      Kv */ 0,
-            /*  ld_src */ k_strideN,
-            /* ld_dst0 */ BLOCK_N,
-            /* ld_dst1 */ head_size_v);
+        {
+          decode_timer::ScopedStageTimer<kEnableTimer> kv_pack_timer(
+              decode_timer::Stage::kKvPackGqa,
+              /*tid=*/tid);
+          pack_vnni<scalar_t, index_t>(
+              /*    dst0 */ Btmp0,
+              /*    dst1 */ Btmp1,
+              /*     src */ k_buffer + head_kv_id * k_strideH,
+              /*     ind */ indices,
+              /*       N */ n_size,
+              /*       K */ head_size,
+              /*      Kv */ 0,
+              /*  ld_src */ k_strideN,
+              /* ld_dst0 */ BLOCK_N,
+              /* ld_dst1 */ head_size_v);
+        }
 
         at::native::cpublas::brgemm(
             /* M     */ h_size,
@@ -1465,14 +1489,19 @@ void decode_attention_grouped_packed_kernel_impl(
           copy_stub<scalar_t, BLOCK_N>(s_delta2 + h * BLOCK_N, s_delta + h * BLOCK_N);
         }
 
-        pack_vnni_value<scalar_t, index_t>(
-            /*    dst */ Btmp1,
-            /*    src */ v_buffer + head_kv_id * v_strideH,
-            /*    ind */ indices,
-            /*     K  */ n_size,
-            /*     N  */ head_size_v,
-            /* ld_src */ v_strideN,
-            /* ld_dst */ head_size_v);
+        {
+          decode_timer::ScopedStageTimer<kEnableTimer> kv_pack_timer(
+              decode_timer::Stage::kKvPackGqa,
+              /*tid=*/tid);
+          pack_vnni_value<scalar_t, index_t>(
+              /*    dst */ Btmp1,
+              /*    src */ v_buffer + head_kv_id * v_strideH,
+              /*    ind */ indices,
+              /*     K  */ n_size,
+              /*     N  */ head_size_v,
+              /* ld_src */ v_strideN,
+              /* ld_dst */ head_size_v);
+        }
 
         at::native::cpublas::brgemm(
             /* M     */ h_size,
@@ -1501,8 +1530,13 @@ void decode_attention_grouped_packed_kernel_impl(
     at::native::cpublas::brgemm_release();
   });
 
-  decode_accumulate_kv_splits(
-      output, attn_logits, batches, num_heads, head_size_v, num_kv_splits, l_stride1, l_stride2);
+  {
+    decode_timer::ScopedStageTimer<kEnableTimer> logits_timer(
+        decode_timer::Stage::kLogitsAccum,
+        /*tid=*/0);
+    decode_accumulate_kv_splits(
+        output, attn_logits, batches, num_heads, head_size_v, num_kv_splits, l_stride1, l_stride2);
+  }
 }  // packed GQA/MQA
 
 template <typename scalar_t, typename index_t, int64_t BLOCK_N>
@@ -1777,6 +1811,15 @@ void decode_attention_cpu(
   constexpr int64_t BLOCK_N_GQA = 256;
   constexpr int64_t BLOCK_N_MLA = 128;
   constexpr int64_t BLOCK_N_GQA_PACKED = 128;
+  const bool is_profile_target = is_mla || use_grouped_packed;
+  const bool timer_on = is_profile_target && decode_timer::is_active();
+  if (decode_timer::is_active()) {
+    if (is_profile_target) {
+      decode_timer::mark_profiled_call();
+    } else {
+      decode_timer::mark_skipped_call();
+    }
+  }
 
   // buffer for packing k_cache and v_cache
   int num_threads = at::get_num_threads();
@@ -1841,7 +1884,7 @@ void decode_attention_cpu(
       } else if (is_mla) {
         // MLA
         TORCH_CHECK(block_n == BLOCK_N_MLA, "decode MLA: unsupported BLOCK_N ", block_n);
-        decode_attention_mla_kernel_impl<scalar_t, index_t, BLOCK_N_MLA>(
+        decode_attention_mla_kernel_impl<scalar_t, index_t, BLOCK_N_MLA, false>(
             output.data_ptr<scalar_t>(),
             attn_logits.data_ptr<float>(),
             query.data_ptr<scalar_t>(),
@@ -1871,7 +1914,7 @@ void decode_attention_cpu(
             size_per_thread);
       } else {
         if (use_grouped_packed) {
-          decode_attention_grouped_packed_kernel_impl<scalar_t, index_t, BLOCK_N_GQA_PACKED>(
+          decode_attention_grouped_packed_kernel_impl<scalar_t, index_t, BLOCK_N_GQA_PACKED, false>(
               output.data_ptr<scalar_t>(),
               attn_logits.data_ptr<float>(),
               query.data_ptr<scalar_t>(),
@@ -2052,25 +2095,50 @@ void decode_attention_cpu_tuned(
   AT_DISPATCH_REDUCED_FLOATING_TYPES(query.scalar_type(), "decode_attention_tuned_kernel", [&] {
     AT_DISPATCH_INDEX_TYPES(index_dtype, "decode_attention_tuned_indices", [&] {
       // update the kv buffer
-      decode_set_kv_buffer(
-          (scalar_t*)k_buffer_data,
-          (scalar_t*)v_buffer_data,
-          key.data_ptr<scalar_t>(),
-          value.data_ptr<scalar_t>(),
-          loc.data_ptr<int64_t>(),
-          num_seqs,
-          num_heads_kv,
-          head_size,
-          head_size_v,
-          k_strideN,
-          k_strideH,
-          v_strideN,
-          v_strideH,
-          nk_strideN,
-          nk_strideH,
-          nv_strideN,
-          nv_strideH,
-          is_mla);
+      if (timer_on) {
+        decode_timer::ScopedStageTimer<true> set_kv_timer(
+            decode_timer::Stage::kSetKvBuffer,
+            /*tid=*/0);
+        decode_set_kv_buffer(
+            (scalar_t*)k_buffer_data,
+            (scalar_t*)v_buffer_data,
+            key.data_ptr<scalar_t>(),
+            value.data_ptr<scalar_t>(),
+            loc.data_ptr<int64_t>(),
+            num_seqs,
+            num_heads_kv,
+            head_size,
+            head_size_v,
+            k_strideN,
+            k_strideH,
+            v_strideN,
+            v_strideH,
+            nk_strideN,
+            nk_strideH,
+            nv_strideN,
+            nv_strideH,
+            is_mla);
+      } else {
+        decode_set_kv_buffer(
+            (scalar_t*)k_buffer_data,
+            (scalar_t*)v_buffer_data,
+            key.data_ptr<scalar_t>(),
+            value.data_ptr<scalar_t>(),
+            loc.data_ptr<int64_t>(),
+            num_seqs,
+            num_heads_kv,
+            head_size,
+            head_size_v,
+            k_strideN,
+            k_strideH,
+            v_strideN,
+            v_strideH,
+            nk_strideN,
+            nk_strideH,
+            nv_strideN,
+            nv_strideH,
+            is_mla);
+      }
 
       if (num_heads == num_heads_kv) {
         // MHA
@@ -2102,37 +2170,11 @@ void decode_attention_cpu_tuned(
       } else if (is_mla) {
         // MLA
         TORCH_CHECK(block_n == BLOCK_N_MLA, "decode_tuned MLA: unsupported BLOCK_N ", block_n);
-        decode_attention_mla_kernel_impl<scalar_t, index_t, BLOCK_N_MLA>(
-            output.data_ptr<scalar_t>(),
-            attn_logits.data_ptr<float>(),
-            query.data_ptr<scalar_t>(),
-            (const scalar_t*)k_buffer_data,
-            (const scalar_t*)v_buffer_data,
-            req_to_token.data_ptr<index_t>(),
-            req_pool_indices.data_ptr<int64_t>(),
-            seq_lens.data_ptr<int64_t>(),
-            buffer.data_ptr<scalar_t>(),
-            num_seqs,
-            num_heads,
-            head_size,
-            head_size_v,
-            num_kv_splits,
-            q_strideM,
-            q_strideH,
-            k_strideN,
-            k_strideH,
-            v_strideN,
-            v_strideH,
-            sm_scale,
-            logit_cap,
-            max_num_reqs,
-            max_context_len,
-            max_total_num_tokens,
-            head_block_num,
-            size_per_thread);
-      } else {
-        if (use_grouped_packed) {
-          decode_attention_grouped_packed_kernel_impl<scalar_t, index_t, BLOCK_N_GQA_PACKED>(
+        if (timer_on) {
+          decode_timer::ScopedStageTimer<true> kernel_total_timer(
+              decode_timer::Stage::kKernelImplTotal,
+              /*tid=*/0);
+          decode_attention_mla_kernel_impl<scalar_t, index_t, BLOCK_N_MLA, true>(
               output.data_ptr<scalar_t>(),
               attn_logits.data_ptr<float>(),
               query.data_ptr<scalar_t>(),
@@ -2144,11 +2186,9 @@ void decode_attention_cpu_tuned(
               buffer.data_ptr<scalar_t>(),
               num_seqs,
               num_heads,
-              num_heads_kv,
               head_size,
               head_size_v,
               num_kv_splits,
-              head_block_num,
               q_strideM,
               q_strideH,
               k_strideN,
@@ -2160,7 +2200,104 @@ void decode_attention_cpu_tuned(
               max_num_reqs,
               max_context_len,
               max_total_num_tokens,
+              head_block_num,
               size_per_thread);
+        } else {
+          decode_attention_mla_kernel_impl<scalar_t, index_t, BLOCK_N_MLA, false>(
+              output.data_ptr<scalar_t>(),
+              attn_logits.data_ptr<float>(),
+              query.data_ptr<scalar_t>(),
+              (const scalar_t*)k_buffer_data,
+              (const scalar_t*)v_buffer_data,
+              req_to_token.data_ptr<index_t>(),
+              req_pool_indices.data_ptr<int64_t>(),
+              seq_lens.data_ptr<int64_t>(),
+              buffer.data_ptr<scalar_t>(),
+              num_seqs,
+              num_heads,
+              head_size,
+              head_size_v,
+              num_kv_splits,
+              q_strideM,
+              q_strideH,
+              k_strideN,
+              k_strideH,
+              v_strideN,
+              v_strideH,
+              sm_scale,
+              logit_cap,
+              max_num_reqs,
+              max_context_len,
+              max_total_num_tokens,
+              head_block_num,
+              size_per_thread);
+        }
+      } else {
+        if (use_grouped_packed) {
+          if (timer_on) {
+            decode_timer::ScopedStageTimer<true> kernel_total_timer(
+                decode_timer::Stage::kKernelImplTotal,
+                /*tid=*/0);
+            decode_attention_grouped_packed_kernel_impl<scalar_t, index_t, BLOCK_N_GQA_PACKED, true>(
+                output.data_ptr<scalar_t>(),
+                attn_logits.data_ptr<float>(),
+                query.data_ptr<scalar_t>(),
+                (const scalar_t*)k_buffer_data,
+                (const scalar_t*)v_buffer_data,
+                req_to_token.data_ptr<index_t>(),
+                req_pool_indices.data_ptr<int64_t>(),
+                seq_lens.data_ptr<int64_t>(),
+                buffer.data_ptr<scalar_t>(),
+                num_seqs,
+                num_heads,
+                num_heads_kv,
+                head_size,
+                head_size_v,
+                num_kv_splits,
+                head_block_num,
+                q_strideM,
+                q_strideH,
+                k_strideN,
+                k_strideH,
+                v_strideN,
+                v_strideH,
+                sm_scale,
+                logit_cap,
+                max_num_reqs,
+                max_context_len,
+                max_total_num_tokens,
+                size_per_thread);
+          } else {
+            decode_attention_grouped_packed_kernel_impl<scalar_t, index_t, BLOCK_N_GQA_PACKED, false>(
+                output.data_ptr<scalar_t>(),
+                attn_logits.data_ptr<float>(),
+                query.data_ptr<scalar_t>(),
+                (const scalar_t*)k_buffer_data,
+                (const scalar_t*)v_buffer_data,
+                req_to_token.data_ptr<index_t>(),
+                req_pool_indices.data_ptr<int64_t>(),
+                seq_lens.data_ptr<int64_t>(),
+                buffer.data_ptr<scalar_t>(),
+                num_seqs,
+                num_heads,
+                num_heads_kv,
+                head_size,
+                head_size_v,
+                num_kv_splits,
+                head_block_num,
+                q_strideM,
+                q_strideH,
+                k_strideN,
+                k_strideH,
+                v_strideN,
+                v_strideH,
+                sm_scale,
+                logit_cap,
+                max_num_reqs,
+                max_context_len,
+                max_total_num_tokens,
+                size_per_thread);
+          }
         } else {
           // Generic GQA/MQA
           decode_attention_grouped_kernel_impl<scalar_t, index_t, BLOCK_N_GQA>(

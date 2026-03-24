@@ -108,6 +108,11 @@ def parse_args():
     parser.add_argument("--logit-cap", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--cpu-bind", type=str, default=None)
+    parser.add_argument(
+        "--enable-decode-timer",
+        action="store_true",
+        help="Enable C++ decode timer for tuned/tdm/adaptive MLA + packed GQA paths.",
+    )
     return parser.parse_args()
 
 
@@ -454,6 +459,9 @@ def main():
             f"target_path={'yes' if adaptive_target else 'no(fallback-to-sdm)'}"
         )
     print(f"Measured rounds={NUM_ROUNDS}, invocations_per_round={INVOCATIONS_PER_ROUND}")
+    if args.enable_decode_timer:
+        print("Decode timer: enabled")
+        torch.ops.sgl_kernel.decode_timer_start(True)
 
     round_times = []
     print("\nRound Results (latency in us)")
@@ -468,6 +476,8 @@ def main():
             total_us = dt * 1e6
             avg_us = total_us / INVOCATIONS_PER_ROUND
             print(f"{r + 1:>8d} | {total_us:>14.3f} | {avg_us:>16.3f}")
+    if args.enable_decode_timer:
+        torch.ops.sgl_kernel.decode_timer_stop_and_print()
 
     per_call_us = [(t / INVOCATIONS_PER_ROUND) * 1e6 for t in round_times]
 
