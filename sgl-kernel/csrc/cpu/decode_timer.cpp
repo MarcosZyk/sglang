@@ -151,11 +151,11 @@ std::string_view stage_name(Stage stage) {
 }  // namespace decode_timer
 
 void decode_timer_start(at::Tensor& placeholder, bool reset) {
-  UNUSED(placeholder);
+  (void)placeholder;
   decode_timer::start(reset);
 }
 
 void decode_timer_stop_and_print(at::Tensor& placeholder) {
-  UNUSED(placeholder);
+  (void)placeholder;
   decode_timer::stop_and_print();
 }
