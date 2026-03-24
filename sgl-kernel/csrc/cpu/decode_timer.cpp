@@ -78,9 +78,9 @@ void stop_and_print() {
   }
 
   const int kernel_stage_id = static_cast<int>(Stage::kKernelImplTotal);
-  const int thread_stage_id = static_cast<int>(Stage::kSingleThread);
+  const int single_thread_stage_id = static_cast<int>(Stage::kSingleThread);
   const uint64_t kernel_inv = merged[kernel_stage_id].count;
-  const uint64_t single_thread_inv = merged[thread_stage_id].count;
+  const uint64_t single_thread_inv = merged[single_thread_stage_id].count;
   const double kernel_sum_us = static_cast<double>(merged[kernel_stage_id].sum_ns) / 1000.0;
 
   double derived_thread_num = 0.0;
@@ -115,15 +115,44 @@ void stop_and_print() {
         "warning: non-divisible invocation ratio detected, transformation uses floating ratio fallback.\n");
   }
 
+  // Thread-local average stage proportion:
+  // For each active thread t (single_thread_sum_ns(t) > 0), compute
+  // p_t(stage) = stage_sum_ns(t) / single_thread_sum_ns(t), then average p_t.
+  std::array<double, kNumStages> thread_prop_sum{};
+  uint64_t num_active_threads = 0;
+  for (const auto& thread_stats : s.per_thread) {
+    const uint64_t denom_ns = thread_stats[single_thread_stage_id].sum_ns;
+    if (denom_ns == 0) {
+      continue;
+    }
+    num_active_threads += 1;
+    for (int i = 0; i < kNumStages; ++i) {
+      thread_prop_sum[i] += static_cast<double>(thread_stats[i].sum_ns) / static_cast<double>(denom_ns);
+    }
+  }
+  std::array<double, kNumStages> avg_thread_prop_pct{};
+  if (num_active_threads > 0) {
+    for (int i = 0; i < kNumStages; ++i) {
+      avg_thread_prop_pct[i] = 100.0 * thread_prop_sum[i] / static_cast<double>(num_active_threads);
+    }
+  }
+
+  auto is_parallel_stage = [](int stage_id) {
+    const Stage stage = static_cast<Stage>(stage_id);
+    return stage == Stage::kKvPackMla || stage == Stage::kKvPackGqa || stage == Stage::kAttnCompute ||
+        stage == Stage::kSingleThread;
+  };
+
   std::printf(
-      "%-20s | %16s | %16s | %16s | %16s | %12s\n",
+      "%-20s | %16s | %16s | %16s | %16s | %12s | %16s\n",
       "stage",
       "invocation_times",
       "avg_duration_us",
       "sum_duration_us",
       "linear_sum_us",
-      "proportion_%");
-  std::printf("----------------------------------------------------------------------------------------------------------------\n");
+      "proportion_%",
+      "avg_thread_prop_%");
+  std::printf("--------------------------------------------------------------------------------------------------------------------------------\n");
   for (int i = 0; i < kNumStages; ++i) {
     const auto cnt = merged[i].count;
     const auto sum_ns = merged[i].sum_ns;
@@ -134,16 +163,23 @@ void stop_and_print() {
       linear_sum_us = sum_us / derived_thread_num;
     }
     const double proportion_pct = kernel_sum_us > 0.0 ? (100.0 * linear_sum_us / kernel_sum_us) : 0.0;
+    char avg_thread_prop_buf[32];
+    if (is_parallel_stage(i)) {
+      std::snprintf(avg_thread_prop_buf, sizeof(avg_thread_prop_buf), "%.3f", avg_thread_prop_pct[i]);
+    } else {
+      std::snprintf(avg_thread_prop_buf, sizeof(avg_thread_prop_buf), "-");
+    }
 
     std::printf(
-        "%-20.*s | %16llu | %16.3f | %16.3f | %16.3f | %12.3f\n",
+        "%-20.*s | %16llu | %16.3f | %16.3f | %16.3f | %12.3f | %16s\n",
         static_cast<int>(stage_name(static_cast<Stage>(i)).size()),
         stage_name(static_cast<Stage>(i)).data(),
         static_cast<unsigned long long>(cnt),
         avg_us,
         sum_us,
         linear_sum_us,
-        proportion_pct);
+        proportion_pct,
+        avg_thread_prop_buf);
   }
   if (s.skipped_calls > 0) {
     std::printf("skipped_calls: %llu\n", static_cast<unsigned long long>(s.skipped_calls));
