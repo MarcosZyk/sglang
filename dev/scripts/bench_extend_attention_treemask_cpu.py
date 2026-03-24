@@ -67,6 +67,12 @@ def parse_args():
     parser.add_argument("--head-size", type=int, default=None)
     parser.add_argument("--head-size-v", type=int, default=None)
     parser.add_argument("--prefix-len", type=int, default=None)
+    parser.add_argument(
+        "--prefix-lens",
+        type=str,
+        default=None,
+        help='Comma-separated per-request prefix lengths. Overrides --prefix-len. Example: "8192,16384,32768,8192".',
+    )
     parser.add_argument("--extend-len", type=int, default=None)
     parser.add_argument("--dtype", type=str, choices=["bf16", "fp16"], default="bf16")
     parser.add_argument("--sm-scale", type=float, default=None)
@@ -103,6 +109,33 @@ def validate_shape(shape):
     assert shape["extend_len"] > 0
 
 
+def parse_int_list(value: str, name: str) -> List[int]:
+    try:
+        values = [int(x.strip()) for x in value.split(",") if x.strip()]
+    except ValueError as e:
+        raise ValueError(f"{name} must be a comma-separated integer list, got: {value}") from e
+    if not values:
+        raise ValueError(f"{name} must not be empty")
+    return values
+
+
+def resolve_prefix_lens(args, shape) -> List[int]:
+    if args.prefix_lens is not None:
+        prefix_lens = parse_int_list(args.prefix_lens, "--prefix-lens")
+        if len(prefix_lens) != shape["batch_size"]:
+            raise ValueError(
+                f"--prefix-lens length ({len(prefix_lens)}) must equal batch_size ({shape['batch_size']})"
+            )
+        if any(x < 0 for x in prefix_lens):
+            raise ValueError("--prefix-lens values must all be >= 0")
+        return prefix_lens
+
+    prefix_len = shape["prefix_len"]
+    if prefix_len < 0:
+        raise ValueError(f"--prefix-len must be >= 0, got {prefix_len}")
+    return [prefix_len for _ in range(shape["batch_size"])]
+
+
 def build_custom_mask(seq_lens: torch.Tensor, extend_seq_lens: torch.Tensor) -> torch.Tensor:
     # Packed layout per batch:
     # [extend_len_0 * total_kv_len_0, extend_len_1 * total_kv_len_1, ...]
@@ -116,19 +149,23 @@ def build_custom_mask(seq_lens: torch.Tensor, extend_seq_lens: torch.Tensor) -> 
     return torch.cat(masks, dim=0).contiguous()
 
 
-def make_treemask_bundle(shape, dtype, device):
+def make_treemask_bundle(shape, dtype, device, prefix_lens_list: List[int]):
     b = shape["batch_size"]
     hq = shape["num_heads"]
     hkv = shape["num_kv_heads"]
     d = shape["head_size"]
     dv = shape["head_size_v"]
-    prefix_len = shape["prefix_len"]
     extend_len = shape["extend_len"]
 
-    total_kv_len = prefix_len + extend_len
-    max_context_len = total_kv_len
-    total_tokens = b * total_kv_len
+    total_kv_lens = [p + extend_len for p in prefix_lens_list]
+    max_context_len = max(total_kv_lens)
+    total_tokens = sum(total_kv_lens)
     total_extend_tokens = b * extend_len
+    starts: List[int] = []
+    offset = 0
+    for tl in total_kv_lens:
+        starts.append(offset)
+        offset += tl
 
     q_extend = torch.randn((total_extend_tokens, hq, d), dtype=dtype, device=device)
     o_extend = torch.empty((total_extend_tokens, hq, dv), dtype=dtype, device=device)
@@ -137,11 +174,14 @@ def make_treemask_bundle(shape, dtype, device):
 
     req_to_token = torch.empty((b, max_context_len), dtype=torch.int32, device=device)
     for i in range(b):
-        s = i * total_kv_len
-        req_to_token[i] = torch.arange(s, s + total_kv_len, dtype=torch.int32, device=device)
+        s = starts[i]
+        total_kv_len = total_kv_lens[i]
+        req_to_token[i, :total_kv_len] = torch.arange(s, s + total_kv_len, dtype=torch.int32, device=device)
+        if total_kv_len < max_context_len:
+            req_to_token[i, total_kv_len:] = s
 
     req_pool_indices = torch.arange(b, dtype=torch.int64, device=device)
-    seq_lens = torch.full((b,), prefix_len, dtype=torch.int64, device=device)
+    seq_lens = torch.tensor(prefix_lens_list, dtype=torch.int64, device=device)
     extend_seq_lens = torch.full((b,), extend_len, dtype=torch.int32, device=device)
     extend_start_loc = torch.zeros((b,), dtype=torch.int32, device=device)
     if b > 1:
@@ -163,8 +203,11 @@ def make_treemask_bundle(shape, dtype, device):
     }
 
 
-def make_treemask_pool(shape, dtype, device) -> List[dict]:
-    return [make_treemask_bundle(shape=shape, dtype=dtype, device=device) for _ in range(INVOCATIONS_PER_ROUND)]
+def make_treemask_pool(shape, dtype, device, prefix_lens_list: List[int]) -> List[dict]:
+    return [
+        make_treemask_bundle(shape=shape, dtype=dtype, device=device, prefix_lens_list=prefix_lens_list)
+        for _ in range(INVOCATIONS_PER_ROUND)
+    ]
 
 
 def run_invocations(pool):
@@ -194,6 +237,8 @@ def main():
 
     shape = resolve_shape(args)
     validate_shape(shape)
+    prefix_lens_list = resolve_prefix_lens(args, shape)
+    shape["prefix_len"] = max(prefix_lens_list)
 
     sm_scale = args.sm_scale if args.sm_scale is not None else (1.0 / math.sqrt(shape["head_size"]))
     logit_cap = args.logit_cap
@@ -203,7 +248,7 @@ def main():
         binding_info = torch.ops.sgl_kernel.init_cpu_threads_env(args.cpu_bind)
         print(binding_info, end="" if binding_info.endswith("\n") else "\n")
 
-    pool = make_treemask_pool(shape=shape, dtype=dtype, device=device)
+    pool = make_treemask_pool(shape=shape, dtype=dtype, device=device, prefix_lens_list=prefix_lens_list)
     for tensors in pool:
         tensors["sm_scale"] = sm_scale
         tensors["logit_cap"] = logit_cap
@@ -213,11 +258,18 @@ def main():
         with torch.inference_mode():
             run_invocations(pool)
 
+    prefix_min = min(prefix_lens_list)
+    prefix_p50 = percentile([float(x) for x in prefix_lens_list], 0.5)
+    prefix_max = max(prefix_lens_list)
     print(
         "Config: "
         f"preset={args.preset} B={shape['batch_size']} H={shape['num_heads']} HKV={shape['num_kv_heads']} "
         f"D={shape['head_size']} DV={shape['head_size_v']} prefix={shape['prefix_len']} extend={shape['extend_len']} "
         f"dtype={args.dtype}"
+    )
+    print(
+        "Hybrid prefix_lens: "
+        f"min={prefix_min} p50={prefix_p50:.1f} max={prefix_max} list={','.join(str(x) for x in prefix_lens_list)}"
     )
     print(f"Measured rounds={NUM_ROUNDS}, invocations_per_round={INVOCATIONS_PER_ROUND}")
 

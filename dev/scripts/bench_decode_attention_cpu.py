@@ -90,6 +90,12 @@ def parse_args():
     parser.add_argument("--head-size", type=int, default=None)
     parser.add_argument("--head-size-v", type=int, default=None)
     parser.add_argument("--seq-len", type=int, default=None)
+    parser.add_argument(
+        "--seq-lens",
+        type=str,
+        default=None,
+        help='Comma-separated per-request sequence lengths. Overrides --seq-len. Example: "8192,16384,32768,8192".',
+    )
     parser.add_argument("--num-kv-splits", type=int, default=None)
     parser.add_argument(
         "--head-block-num",
@@ -132,16 +138,48 @@ def validate_shape(shape):
     assert shape["num_kv_splits"] > 0
 
 
-def make_decode_bundle(shape, dtype, device, use_mla: bool):
+def parse_int_list(value: str, name: str) -> List[int]:
+    try:
+        values = [int(x.strip()) for x in value.split(",") if x.strip()]
+    except ValueError as e:
+        raise ValueError(f"{name} must be a comma-separated integer list, got: {value}") from e
+    if not values:
+        raise ValueError(f"{name} must not be empty")
+    return values
+
+
+def resolve_seq_lens(args, shape) -> List[int]:
+    if args.seq_lens is not None:
+        seq_lens = parse_int_list(args.seq_lens, "--seq-lens")
+        if len(seq_lens) != shape["batch_size"]:
+            raise ValueError(
+                f"--seq-lens length ({len(seq_lens)}) must equal batch_size ({shape['batch_size']})"
+            )
+        if any(x <= 0 for x in seq_lens):
+            raise ValueError("--seq-lens values must all be > 0")
+        return seq_lens
+
+    seq_len = shape["seq_len"]
+    if seq_len <= 0:
+        raise ValueError(f"--seq-len must be > 0, got {seq_len}")
+    return [seq_len for _ in range(shape["batch_size"])]
+
+
+def make_decode_bundle(shape, dtype, device, use_mla: bool, seq_lens_list: List[int]):
     b = shape["batch_size"]
     hq = shape["num_heads"]
     hkv = shape["num_kv_heads"]
     d = shape["head_size"]
     dv = shape["head_size_v"]
-    seq_len = shape["seq_len"]
     num_kv_splits = shape["num_kv_splits"]
+    max_context_len = max(seq_lens_list)
+    total_tokens = sum(seq_lens_list)
+    starts: List[int] = []
+    offset = 0
+    for sl in seq_lens_list:
+        starts.append(offset)
+        offset += sl
 
-    total_tokens = b * seq_len
     query = torch.randn((b, hq, d), dtype=dtype, device=device)
     if use_mla:
         k_buffer = torch.randn((total_tokens, hkv, d), dtype=dtype, device=device)
@@ -154,11 +192,21 @@ def make_decode_bundle(shape, dtype, device, use_mla: bool):
         k_buffer = torch.randn((total_tokens, hkv, d), dtype=dtype, device=device)
         v_buffer = torch.randn((total_tokens, hkv, dv), dtype=dtype, device=device)
     output = torch.empty((b, hq, dv), dtype=dtype, device=device)
-    loc = torch.randperm(total_tokens, device=device)[:b].to(torch.int64)
+    loc = torch.tensor(
+        [starts[i] + seq_lens_list[i] - 1 for i in range(b)],
+        dtype=torch.int64,
+        device=device,
+    )
     attn_logits = torch.empty((b, hq, num_kv_splits, dv + 1), dtype=torch.float32, device=device)
-    req_to_token = torch.arange(total_tokens, dtype=torch.int32, device=device).reshape(b, seq_len)
+    req_to_token = torch.empty((b, max_context_len), dtype=torch.int32, device=device)
+    for i in range(b):
+        start = starts[i]
+        sl = seq_lens_list[i]
+        req_to_token[i, :sl] = torch.arange(start, start + sl, dtype=torch.int32, device=device)
+        if sl < max_context_len:
+            req_to_token[i, sl:] = start
     req_pool_indices = torch.arange(b, dtype=torch.int64, device=device)
-    seq_lens = torch.full((b,), seq_len, dtype=torch.int64, device=device)
+    seq_lens = torch.tensor(seq_lens_list, dtype=torch.int64, device=device)
 
     return {
         "query": query,
@@ -175,9 +223,15 @@ def make_decode_bundle(shape, dtype, device, use_mla: bool):
     }
 
 
-def make_decode_pool(shape, dtype, device, use_mla: bool) -> List[dict]:
+def make_decode_pool(shape, dtype, device, use_mla: bool, seq_lens_list: List[int]) -> List[dict]:
     return [
-        make_decode_bundle(shape=shape, dtype=dtype, device=device, use_mla=use_mla)
+        make_decode_bundle(
+            shape=shape,
+            dtype=dtype,
+            device=device,
+            use_mla=use_mla,
+            seq_lens_list=seq_lens_list,
+        )
         for _ in range(INVOCATIONS_PER_ROUND)
     ]
 
@@ -229,6 +283,8 @@ def main():
 
     shape = resolve_shape(args)
     validate_shape(shape)
+    seq_lens_list = resolve_seq_lens(args, shape)
+    shape["seq_len"] = max(seq_lens_list)
 
     sm_scale = args.sm_scale if args.sm_scale is not None else (1.0 / math.sqrt(shape["head_size"]))
     logit_cap = args.logit_cap
@@ -281,7 +337,7 @@ def main():
         num_threads = torch.get_num_threads()
         derived_num_kv_splits = None
 
-    pool = make_decode_pool(shape=shape, dtype=dtype, device=device, use_mla=use_mla)
+    pool = make_decode_pool(shape=shape, dtype=dtype, device=device, use_mla=use_mla, seq_lens_list=seq_lens_list)
     for tensors in pool:
         tensors["sm_scale"] = sm_scale
         tensors["logit_cap"] = logit_cap
@@ -299,6 +355,9 @@ def main():
     else:
         derived_head_block_size = ((shape["num_heads"] // shape["num_kv_heads"]) + args.head_block_num - 1) // args.head_block_num
 
+    seq_min = min(seq_lens_list)
+    seq_p50 = percentile([float(x) for x in seq_lens_list], 0.5)
+    seq_max = max(seq_lens_list)
     print(
         "Config: "
         f"strategy={args.strategy} workload={args.workload} effective_layout={'mla' if use_mla else 'non-mla'} "
@@ -306,6 +365,10 @@ def main():
         f"preset={args.preset} B={shape['batch_size']} H={shape['num_heads']} HKV={shape['num_kv_heads']} "
         f"D={shape['head_size']} DV={shape['head_size_v']} L={shape['seq_len']} splits={shape['num_kv_splits']} "
         f"dtype={args.dtype}"
+    )
+    print(
+        "Hybrid seq_lens: "
+        f"min={seq_min} p50={seq_p50:.1f} max={seq_max} list={','.join(str(x) for x in seq_lens_list)}"
     )
     if args.strategy == "tdm":
         print(f"TDM derived_num_kv_splits={derived_num_kv_splits} num_threads={num_threads}")
