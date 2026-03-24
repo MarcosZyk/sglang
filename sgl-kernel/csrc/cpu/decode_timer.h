@@ -13,8 +13,9 @@ enum class Stage : int {
   kKvPackGqa = 3,
   kAttnCompute = 4,
   kLogitsAccum = 5,
-  kThreadTotal = 6,
-  kCount = 7,
+  kSingleThread = 6,
+  kRealThreadTotal = 7,
+  kCount = 8,
 };
 
 bool is_active();

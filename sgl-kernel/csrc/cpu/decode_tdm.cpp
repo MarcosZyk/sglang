@@ -409,9 +409,13 @@ void decode_attention_mla_tdm_kernel_impl(
 
   TORCH_CHECK(logit_cap == 0.f, "decode_tdm MLA: expect no logit_cap.");
 
-  at::parallel_for(0, num_worker_slots, 0, [&](int64_t begin, int64_t end) {
+  {
+    decode_timer::ScopedStageTimer<kEnableTimer> real_thread_total_timer(
+        decode_timer::Stage::kRealThreadTotal,
+        /*tid=*/0);
+    at::parallel_for(0, num_worker_slots, 0, [&](int64_t begin, int64_t end) {
       const int tid = at::get_thread_num();
-      decode_timer::ScopedStageTimer<kEnableTimer> thread_timer(decode_timer::Stage::kThreadTotal, tid);
+      decode_timer::ScopedStageTimer<kEnableTimer> thread_timer(decode_timer::Stage::kSingleThread, tid);
       scalar_t* __restrict__ Btmp0 = buffer + tid * buffer_size_per_thread;
       scalar_t* __restrict__ Btmp1 = Btmp0 + BLOCK_N * head_size;
       fill_stub(Btmp1, 0.f, BLOCK_N * head_size_v);
@@ -544,8 +548,9 @@ void decode_attention_mla_tdm_kernel_impl(
         }
       }
       }
-    at::native::cpublas::brgemm_release();
-  });
+      at::native::cpublas::brgemm_release();
+    });
+  }
 
   {
     decode_timer::ScopedStageTimer<kEnableTimer> logits_timer(
@@ -597,9 +602,13 @@ void decode_attention_grouped_packed_tdm_kernel_impl(
   const int64_t num_groups = num_heads / num_heads_kv;
   const int64_t num_worker_slots = num_blocks * num_kv_splits;
 
-  at::parallel_for(0, num_worker_slots, 0, [&](int64_t begin, int64_t end) {
+  {
+    decode_timer::ScopedStageTimer<kEnableTimer> real_thread_total_timer(
+        decode_timer::Stage::kRealThreadTotal,
+        /*tid=*/0);
+    at::parallel_for(0, num_worker_slots, 0, [&](int64_t begin, int64_t end) {
       const int tid = at::get_thread_num();
-      decode_timer::ScopedStageTimer<kEnableTimer> thread_timer(decode_timer::Stage::kThreadTotal, tid);
+      decode_timer::ScopedStageTimer<kEnableTimer> thread_timer(decode_timer::Stage::kSingleThread, tid);
       scalar_t* __restrict__ Btmp0 = buffer + tid * buffer_size_per_thread;
       scalar_t* __restrict__ Btmp1 = Btmp0 + BLOCK_N * head_size;
       fill_stub(Btmp1, 0.f, BLOCK_N * head_size_v);
@@ -759,8 +768,9 @@ void decode_attention_grouped_packed_tdm_kernel_impl(
         }
       }
     }  // slot
-    at::native::cpublas::brgemm_release();
-  });
+      at::native::cpublas::brgemm_release();
+    });
+  }
 
   {
     decode_timer::ScopedStageTimer<kEnableTimer> logits_timer(

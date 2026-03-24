@@ -1160,10 +1160,14 @@ void decode_attention_mla_kernel_impl(
 
   TORCH_CHECK(logit_cap == 0.f, "decode MLA: expect no logit_cap.");
 
-  // parallel on [batches, num_blocks, num_kv_splits]
-  at::parallel_for(0, batches * num_blocks * num_kv_splits, 0, [&](int64_t begin, int64_t end) {
+  {
+    decode_timer::ScopedStageTimer<kEnableTimer> real_thread_total_timer(
+        decode_timer::Stage::kRealThreadTotal,
+        /*tid=*/0);
+    // parallel on [batches, num_blocks, num_kv_splits]
+    at::parallel_for(0, batches * num_blocks * num_kv_splits, 0, [&](int64_t begin, int64_t end) {
       const int tid = at::get_thread_num();
-      decode_timer::ScopedStageTimer<kEnableTimer> thread_timer(decode_timer::Stage::kThreadTotal, tid);
+      decode_timer::ScopedStageTimer<kEnableTimer> thread_timer(decode_timer::Stage::kSingleThread, tid);
       int64_t bs{0}, block_id{0}, kv_id{0};
       data_index_init(begin, bs, batches, block_id, num_blocks, kv_id, num_kv_splits);
 
@@ -1314,8 +1318,9 @@ void decode_attention_mla_kernel_impl(
       // move to the next index
       data_index_step(bs, batches, block_id, num_blocks, kv_id, num_kv_splits);
     }
-    at::native::cpublas::brgemm_release();
-  });
+      at::native::cpublas::brgemm_release();
+    });
+  }
 
   {
     decode_timer::ScopedStageTimer<kEnableTimer> logits_timer(
@@ -1370,12 +1375,16 @@ void decode_attention_grouped_packed_kernel_impl(
   const int64_t num_blocks = head_block_num;
   const int64_t BLOCK_H = div_up(num_groups, num_blocks);
 
-  at::parallel_for(0, batches * num_heads_kv * num_blocks * num_kv_splits, 0, [&](int64_t begin, int64_t end) {
+  {
+    decode_timer::ScopedStageTimer<kEnableTimer> real_thread_total_timer(
+        decode_timer::Stage::kRealThreadTotal,
+        /*tid=*/0);
+    at::parallel_for(0, batches * num_heads_kv * num_blocks * num_kv_splits, 0, [&](int64_t begin, int64_t end) {
       int64_t bs{0}, head_kv_id{0}, block_id{0}, kv_id{0};
       data_index_init(begin, bs, batches, head_kv_id, num_heads_kv, block_id, num_blocks, kv_id, num_kv_splits);
 
       const int tid = at::get_thread_num();
-      decode_timer::ScopedStageTimer<kEnableTimer> thread_timer(decode_timer::Stage::kThreadTotal, tid);
+      decode_timer::ScopedStageTimer<kEnableTimer> thread_timer(decode_timer::Stage::kSingleThread, tid);
       scalar_t* __restrict__ Btmp0 = buffer + tid * buffer_size_per_thread;
       scalar_t* __restrict__ Btmp1 = Btmp0 + BLOCK_N * head_size;
       fill_stub(Btmp1, 0.f, BLOCK_N * head_size_v);
@@ -1527,8 +1536,9 @@ void decode_attention_grouped_packed_kernel_impl(
 
       data_index_step(bs, batches, head_kv_id, num_heads_kv, block_id, num_blocks, kv_id, num_kv_splits);
     }
-    at::native::cpublas::brgemm_release();
-  });
+      at::native::cpublas::brgemm_release();
+    });
+  }
 
   {
     decode_timer::ScopedStageTimer<kEnableTimer> logits_timer(
