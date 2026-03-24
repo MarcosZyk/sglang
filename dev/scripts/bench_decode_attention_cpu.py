@@ -461,7 +461,7 @@ def main():
     print(f"Measured rounds={NUM_ROUNDS}, invocations_per_round={INVOCATIONS_PER_ROUND}")
     if args.enable_decode_timer:
         print("Decode timer: enabled")
-        torch.ops.sgl_kernel.decode_timer_start(True)
+        torch.ops.sgl_kernel.decode_timer_start(pool[0]["query"], True)
 
     round_times = []
     print("\nRound Results (latency in us)")
@@ -477,7 +477,7 @@ def main():
             avg_us = total_us / INVOCATIONS_PER_ROUND
             print(f"{r + 1:>8d} | {total_us:>14.3f} | {avg_us:>16.3f}")
     if args.enable_decode_timer:
-        torch.ops.sgl_kernel.decode_timer_stop_and_print()
+        torch.ops.sgl_kernel.decode_timer_stop_and_print(pool[0]["query"])
 
     per_call_us = [(t / INVOCATIONS_PER_ROUND) * 1e6 for t in round_times]
 
