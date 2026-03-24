@@ -757,7 +757,8 @@ void decode_attention_grouped_packed_tdm_kernel_impl(
             }
           }
         }
-      }  // slot
+      }
+    }  // slot
     at::native::cpublas::brgemm_release();
   });
 
