@@ -73,9 +73,9 @@ def parse_args():
     parser.add_argument(
         "--strategy",
         type=str,
-        choices=["sdm", "tdm"],
+        choices=["sdm", "tdm", "adaptive"],
         default="sdm",
-        help="Decode strategy: sdm uses decode_attention_cpu_tuned; tdm uses decode_attention_cpu_tdm with auto-derived num_kv_splits.",
+        help="Decode strategy: sdm uses decode_attention_cpu_tuned; tdm uses decode_attention_cpu_tdm; adaptive uses decode_attention_cpu_adaptive.",
     )
     parser.add_argument(
         "--workload",
@@ -255,6 +255,23 @@ def run_invocations(pool):
                 tensors["logit_cap"],
                 tensors["head_block_num"],
             )
+        elif tensors["strategy"] == "adaptive":
+            torch.ops.sgl_kernel.decode_attention_cpu_adaptive(
+                tensors["query"],
+                tensors["k_buffer"],
+                tensors["v_buffer"],
+                tensors["output"],
+                tensors["key"],
+                tensors["value"],
+                tensors["loc"],
+                tensors["attn_logits"],
+                tensors["req_to_token"],
+                tensors["req_pool_indices"],
+                tensors["seq_lens"],
+                tensors["sm_scale"],
+                tensors["logit_cap"],
+                tensors["head_block_num"],
+            )
         else:
             torch.ops.sgl_kernel.decode_attention_cpu_tuned(
                 tensors["query"],
@@ -273,6 +290,28 @@ def run_invocations(pool):
                 tensors["head_block_num"],
                 tensors["num_kv_splits"],
             )
+
+def use_grouped_packed_decode_kernel_py(
+    batch_size: int,
+    num_heads: int,
+    num_heads_kv: int,
+    head_size: int,
+    head_size_v: int,
+    max_seq_len: int,
+) -> bool:
+    _ = batch_size
+    _ = max_seq_len
+    tile_k = 32
+    if num_heads_kv <= 0 or num_heads % num_heads_kv != 0:
+        return False
+    num_groups = num_heads // num_heads_kv
+    return (
+        num_groups <= 8
+        and head_size <= 256
+        and head_size_v <= 256
+        and head_size % tile_k == 0
+        and head_size_v % tile_k == 0
+    )
 
 
 def main():
@@ -322,6 +361,21 @@ def main():
         binding_info = torch.ops.sgl_kernel.init_cpu_threads_env(args.cpu_bind)
         print(binding_info, end="" if binding_info.endswith("\n") else "\n")
 
+    max_seq_len = max(seq_lens_list)
+    use_grouped_packed = (
+        not use_mla
+        and shape["num_heads"] != shape["num_kv_heads"]
+        and use_grouped_packed_decode_kernel_py(
+            shape["batch_size"],
+            shape["num_heads"],
+            shape["num_kv_heads"],
+            shape["head_size"],
+            shape["head_size_v"],
+            max_seq_len,
+        )
+    )
+    adaptive_target = use_mla or use_grouped_packed
+
     if args.strategy == "tdm":
         num_threads = torch.get_num_threads()
         if num_threads <= 0:
@@ -333,6 +387,28 @@ def main():
             )
         derived_num_kv_splits = num_threads // args.head_block_num
         shape["num_kv_splits"] = derived_num_kv_splits
+    elif args.strategy == "adaptive":
+        num_threads = torch.get_num_threads()
+        if adaptive_target:
+            if use_mla:
+                denom = args.head_block_num
+            else:
+                denom = args.head_block_num * shape["num_kv_heads"]
+            if denom <= 0:
+                raise ValueError(f"Adaptive expects denom > 0, got {denom}")
+            if num_threads % denom != 0:
+                raise ValueError(
+                    f"Adaptive expects num_threads % denom == 0, got num_threads={num_threads}, denom={denom}"
+                )
+            derived_num_kv_splits = num_threads // denom
+            if derived_num_kv_splits <= 0:
+                raise ValueError(
+                    f"Adaptive expects derived split capacity > 0, got {derived_num_kv_splits}"
+                )
+            shape["num_kv_splits"] = derived_num_kv_splits
+        else:
+            # Non-target path falls back to tuned SDM in C++ adaptive op.
+            derived_num_kv_splits = shape["num_kv_splits"]
     else:
         num_threads = torch.get_num_threads()
         derived_num_kv_splits = None
@@ -372,6 +448,11 @@ def main():
     )
     if args.strategy == "tdm":
         print(f"TDM derived_num_kv_splits={derived_num_kv_splits} num_threads={num_threads}")
+    elif args.strategy == "adaptive":
+        print(
+            f"Adaptive derived_split_capacity={derived_num_kv_splits} num_threads={num_threads} "
+            f"target_path={'yes' if adaptive_target else 'no(fallback-to-sdm)'}"
+        )
     print(f"Measured rounds={NUM_ROUNDS}, invocations_per_round={INVOCATIONS_PER_ROUND}")
 
     round_times = []
