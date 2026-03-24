@@ -98,7 +98,7 @@ void stop_and_print() {
   std::printf("\nDecode Timer Statistics\n");
   std::printf(
       "note: denominator=kernel_impl_total(raw_sum_us), derived_thread_num=%.3f, transform: "
-      "if stage_inv==kernel_inv => linear=raw; if stage_inv>thread_inv => linear=raw/derived_thread_num; else linear=raw\n",
+      "if stage_inv==kernel_inv => linear=raw; if stage_inv>=thread_inv => linear=raw/derived_thread_num; else linear=raw\n",
       derived_thread_num);
   if (kernel_inv == 0) {
     std::printf("warning: kernel_impl_total invocation_times is 0, proportion_%% will be 0.\n");
@@ -130,7 +130,7 @@ void stop_and_print() {
     const double sum_us = static_cast<double>(sum_ns) / 1000.0;
     const double avg_us = cnt > 0 ? (sum_us / static_cast<double>(cnt)) : 0.0;
     double linear_sum_us = sum_us;
-    if (cnt > thread_inv && has_valid_thread_ratio) {
+    if (cnt != kernel_inv && cnt >= thread_inv && has_valid_thread_ratio) {
       linear_sum_us = sum_us / derived_thread_num;
     }
     const double proportion_pct = kernel_sum_us > 0.0 ? (100.0 * linear_sum_us / kernel_sum_us) : 0.0;
