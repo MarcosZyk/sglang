@@ -200,9 +200,9 @@ void stop_and_print() {
   const double real_thread_total_cpu_time_us =
       static_cast<double>(merged[real_thread_total_stage_id].sum_ns) / 1000.0 * static_cast<double>(thread_num);
   const double total_cpu_time_bound_us = st_max_us * static_cast<double>(thread_num);
-  const double bound_gap_us = total_cpu_time_bound_us - real_thread_total_cpu_time_us;
+  const double bound_gap_us = real_thread_total_cpu_time_us - total_cpu_time_bound_us;
   const double bound_utilization_pct =
-      total_cpu_time_bound_us > 0.0 ? (100.0 * real_thread_total_cpu_time_us / total_cpu_time_bound_us) : 0.0;
+      real_thread_total_cpu_time_us > 0.0 ? (100.0 * total_cpu_time_bound_us / real_thread_total_cpu_time_us) : 0.0;
 
   std::printf("\nDecode Timer Idleness\n");
   std::printf("%-30s | %16s | %-40s\n", "metric", "value_us", "note");
@@ -228,8 +228,8 @@ void stop_and_print() {
       "real_thread_total_cpu_time_us",
       real_thread_total_cpu_time_us,
       "real_thread_total sum_us * configured_thread_num");
-  std::printf("%-30s | %16.3f | %-40s\n", "bound_gap_us", bound_gap_us, "bound - real_thread_total_cpu_time");
-  std::printf("%-30s | %16.3f | %-40s\n", "bound_utilization_%", bound_utilization_pct, "real / bound * 100");
+  std::printf("%-30s | %16.3f | %-40s\n", "bound_gap_us", bound_gap_us, "real_thread_total_cpu_time - bound");
+  std::printf("%-30s | %16.3f | %-40s\n", "bound_utilization_%", bound_utilization_pct, "bound / real * 100");
 
   if (s.skipped_calls > 0) {
     std::printf("skipped_calls: %llu\n", static_cast<unsigned long long>(s.skipped_calls));
