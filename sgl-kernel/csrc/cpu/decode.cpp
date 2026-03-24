@@ -1811,15 +1811,6 @@ void decode_attention_cpu(
   constexpr int64_t BLOCK_N_GQA = 256;
   constexpr int64_t BLOCK_N_MLA = 128;
   constexpr int64_t BLOCK_N_GQA_PACKED = 128;
-  const bool is_profile_target = is_mla || use_grouped_packed;
-  const bool timer_on = is_profile_target && decode_timer::is_active();
-  if (decode_timer::is_active()) {
-    if (is_profile_target) {
-      decode_timer::mark_profiled_call();
-    } else {
-      decode_timer::mark_skipped_call();
-    }
-  }
 
   // buffer for packing k_cache and v_cache
   int num_threads = at::get_num_threads();
@@ -2081,6 +2072,15 @@ void decode_attention_cpu_tuned(
   constexpr int64_t BLOCK_N_GQA = 256;
   constexpr int64_t BLOCK_N_MLA = 128;
   constexpr int64_t BLOCK_N_GQA_PACKED = 128;
+  const bool is_profile_target = is_mla || use_grouped_packed;
+  const bool timer_on = is_profile_target && decode_timer::is_active();
+  if (decode_timer::is_active()) {
+    if (is_profile_target) {
+      decode_timer::mark_profiled_call();
+    } else {
+      decode_timer::mark_skipped_call();
+    }
+  }
 
   // buffer for packing k_cache and v_cache
   int num_threads = at::get_num_threads();
