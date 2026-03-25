@@ -130,6 +130,21 @@ void decode_attention_cpu_adaptive(
     double logit_cap,
     int64_t head_block_num);
 
+void decode_attention_cpu_opt(
+    at::Tensor& query,
+    at::Tensor& k_cache,
+    at::Tensor& v_cache,
+    at::Tensor& output,
+    at::Tensor& key,
+    at::Tensor& value,
+    at::Tensor& loc,
+    at::Tensor& attn_logits,
+    at::Tensor& req_to_token,
+    at::Tensor& req_pool_indices,
+    at::Tensor& seq_lens,
+    double sm_scale,
+    double logit_cap);
+
 void decode_timer_start(at::Tensor& placeholder, bool reset);
 void decode_timer_stop_and_print(at::Tensor& placeholder);
 
@@ -445,6 +460,11 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
       "Tensor loc, Tensor attn_logits, Tensor req_to_token, Tensor req_pool_indices, Tensor seq_lens, float sm_scale, "
       "float logit_cap, int head_block_num) -> ()");
   m.impl("decode_attention_cpu_adaptive", torch::kCPU, &decode_attention_cpu_adaptive);
+  m.def(
+      "decode_attention_cpu_opt(Tensor query, Tensor k_cache, Tensor v_cahce, Tensor(a!) output, Tensor key, Tensor value, "
+      "Tensor loc, Tensor attn_logits, Tensor req_to_token, Tensor req_pool_indices, Tensor seq_lens, float sm_scale, "
+      "float logit_cap) -> ()");
+  m.impl("decode_attention_cpu_opt", torch::kCPU, &decode_attention_cpu_opt);
   m.def("decode_timer_start(Tensor placeholder, bool reset=True) -> ()");
   m.impl("decode_timer_start", torch::kCPU, &decode_timer_start);
   m.def("decode_timer_stop_and_print(Tensor placeholder) -> ()");

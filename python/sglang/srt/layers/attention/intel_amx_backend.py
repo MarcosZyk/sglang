@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 import torch
@@ -26,18 +27,28 @@ class IntelAMXAttnBackend(AttentionBackend):
 
         self.v_head_dim = model_runner.token_to_kv_pool.get_value_buffer(0).shape[-1]
 
+        decode_opt_env = os.getenv("SGLANG_CPU_DECODE_OPT", "0").strip().lower()
+        self.use_decode_opt = decode_opt_env not in ("", "0", "false", "no", "off")
+
         self.decode_attention_fwd = torch.ops.sgl_kernel.decode_attention_cpu
+        if self.use_decode_opt:
+            self.decode_attention_fwd = torch.ops.sgl_kernel.decode_attention_cpu_opt
         self.extend_attention_fwd = torch.ops.sgl_kernel.extend_attention_cpu
 
     def init_forward_metadata(self, forward_batch: ForwardBatch):
         """Init the metadata for a forward pass."""
 
         bs = forward_batch.batch_size
+        num_kv_splits = 8
+        attn_bs = bs
+        if self.use_decode_opt:
+            num_kv_splits = max(1, torch.get_num_threads())
+            attn_bs = 1
         attn_logits = torch.zeros(
             (
-                bs,
+                attn_bs,
                 self.num_head,
-                8,  # self.num_kv_splits,
+                num_kv_splits,
                 self.v_head_dim + 1,
             ),
             dtype=torch.float32,
@@ -109,21 +120,38 @@ class IntelAMXAttnBackend(AttentionBackend):
         else:
             o = torch.empty_like(q)
 
-        self.decode_attention_fwd(
-            q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
-            forward_batch.token_to_kv_pool.get_key_buffer(layer.layer_id),
-            forward_batch.token_to_kv_pool.get_value_buffer(layer.layer_id),
-            o.view(-1, layer.tp_q_head_num, layer.v_head_dim),
-            k,
-            v,
-            forward_batch.out_cache_loc,
-            attn_logits,
-            forward_batch.req_to_token_pool.req_to_token,
-            forward_batch.req_pool_indices,
-            forward_batch.seq_lens,
-            layer.scaling,
-            layer.logit_cap,
-        )
+        if self.use_decode_opt:
+            self.decode_attention_fwd(
+                q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
+                forward_batch.token_to_kv_pool.get_key_buffer(layer.layer_id),
+                forward_batch.token_to_kv_pool.get_value_buffer(layer.layer_id),
+                o.view(-1, layer.tp_q_head_num, layer.v_head_dim),
+                k,
+                v,
+                forward_batch.out_cache_loc,
+                attn_logits,
+                forward_batch.req_to_token_pool.req_to_token,
+                forward_batch.req_pool_indices,
+                forward_batch.seq_lens,
+                layer.scaling,
+                layer.logit_cap,
+            )
+        else:
+            self.decode_attention_fwd(
+                q.view(-1, layer.tp_q_head_num, layer.qk_head_dim),
+                forward_batch.token_to_kv_pool.get_key_buffer(layer.layer_id),
+                forward_batch.token_to_kv_pool.get_value_buffer(layer.layer_id),
+                o.view(-1, layer.tp_q_head_num, layer.v_head_dim),
+                k,
+                v,
+                forward_batch.out_cache_loc,
+                attn_logits,
+                forward_batch.req_to_token_pool.req_to_token,
+                forward_batch.req_pool_indices,
+                forward_batch.seq_lens,
+                layer.scaling,
+                layer.logit_cap,
+            )
 
         return o
 
