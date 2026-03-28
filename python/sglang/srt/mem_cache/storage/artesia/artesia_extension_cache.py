@@ -39,21 +39,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class ExtensionTreeNode:
+class ArtesiaTreeNode:
     counter = 0
 
     def __init__(self):
-        self.children: dict[Any, "ExtensionTreeNode"] = {}
-        self.parent: Optional["ExtensionTreeNode"] = None
+        self.children: dict[Any, "ArtesiaTreeNode"] = {}
+        self.parent: Optional["ArtesiaTreeNode"] = None
         self.key: list[int] = []
         self.value: Optional[torch.Tensor] = None
         self.page_ids: Optional[list[bytes]] = None
         self.lock_ref = 0
         self.last_access_time = time.monotonic()
-        self.id = ExtensionTreeNode.counter
-        ExtensionTreeNode.counter += 1
+        self.id = ArtesiaTreeNode.counter
+        ArtesiaTreeNode.counter += 1
 
-    def __lt__(self, other: "ExtensionTreeNode") -> bool:
+    def __lt__(self, other: "ArtesiaTreeNode") -> bool:
         return self.last_access_time < other.last_access_time
 
     def get_last_page_id(self) -> Optional[bytes]:
@@ -76,7 +76,7 @@ class ArtesiaExtensionCache(BasePrefixCache):
         tp_group: Optional[torch.distributed.ProcessGroup] = None,
         enable_tree_log: bool = False,
     ):
-        _ = tp_size, tp_group, enable_tree_log
+        _ = page_size, tp_size, tp_group, enable_tree_log
         self.req_to_token_pool = req_to_token_pool
         self.token_to_kv_pool_allocator = token_to_kv_pool_allocator
         self.disable = disable
@@ -88,8 +88,11 @@ class ArtesiaExtensionCache(BasePrefixCache):
         else:
             self.device = torch.device("cpu")
 
-        self.page_size = page_size
-        self._configure_page_layout(page_size)
+        # Keep the constructor signature compatible with other cache
+        # implementations, but use the Artesia handshake as the single
+        # source of truth for page size.
+        self.page_size = 1
+        self._configure_page_layout(self.page_size)
 
         self.k_pool = None
         self.v_pool = None
@@ -130,20 +133,11 @@ class ArtesiaExtensionCache(BasePrefixCache):
                 model=self.model_description,
                 kv_pool=self.kv_pool,
             )
-
-            resolved_page_size = self.artesia_connector.resolve_model_page_size(
+            self.artesia_connector.open()
+            self.page_size = self.artesia_connector.resolve_model_page_size(
                 self.model_description
             )
-            if resolved_page_size != page_size:
-                raise RuntimeError(
-                    "ArtesiaExtensionCache page size mismatch: "
-                    f"sglang={page_size}, artesia={resolved_page_size}. "
-                    "Set SGLang and Artesia to the same page size before enabling "
-                    "the extension cache."
-                )
-            self.page_size = resolved_page_size
             self._configure_page_layout(self.page_size)
-            self.artesia_connector.open()
             logger.info(
                 "Open Artesia extension connection with config: local_rank=%s, "
                 "device=%s, model_description=%s, page_size=%s",
@@ -164,8 +158,8 @@ class ArtesiaExtensionCache(BasePrefixCache):
             self.get_child_key_fn = lambda key: tuple(key[:page_size])
 
     def reset(self):
-        ExtensionTreeNode.counter = 0
-        self.root_node = ExtensionTreeNode()
+        ArtesiaTreeNode.counter = 0
+        self.root_node = ArtesiaTreeNode()
         self.root_node.key = []
         self.root_node.value = []
         self.root_node.page_ids = []
@@ -244,17 +238,9 @@ class ArtesiaExtensionCache(BasePrefixCache):
             self.token_to_kv_pool_allocator.free(token_slots)
             return base_res
 
-        expected_page_count = self._page_count_for_tokens(fetched)
-        if len(load_result.page_ids) != expected_page_count:
-            self.token_to_kv_pool_allocator.free(token_slots)
-            raise RuntimeError(
-                "ArtesiaExtensionCache load returned mismatched page ids: "
-                f"expected {expected_page_count}, got {len(load_result.page_ids)}."
-            )
-
         self.token_to_kv_pool_allocator.free(token_slots[fetched:])
 
-        new_node = ExtensionTreeNode()
+        new_node = ArtesiaTreeNode()
         start = value.numel()
         end = start + fetched
         new_node.key = key[start:end]
@@ -321,12 +307,6 @@ class ArtesiaExtensionCache(BasePrefixCache):
         context = ContextDescription(token_ids=aligned_token_ids, offset=0)
         semantics = self._build_semantics(req.agent_id, req.task_id)
         register_result = self.artesia_connector.register_pages(context, semantics)
-        expected_page_count = self._page_count_for_tokens(page_aligned_len)
-        if len(register_result.page_ids) != expected_page_count:
-            raise RuntimeError(
-                "ArtesiaExtensionCache registration returned mismatched page ids: "
-                f"expected {expected_page_count}, got {len(register_result.page_ids)}."
-            )
         self._bind_page_ids(aligned_token_ids, register_result.page_ids)
 
         self.req_to_token_pool.free(req.req_pool_idx)
@@ -351,9 +331,14 @@ class ArtesiaExtensionCache(BasePrefixCache):
             page_aligned_kv_indices = kv_indices.to(dtype=torch.int64, copy=True)
         page_aligned_token_ids = token_ids[:page_aligned_len]
 
-        self.insert(page_aligned_token_ids, page_aligned_kv_indices)
+        new_prefix_len = self.insert(page_aligned_token_ids, page_aligned_kv_indices)
+        self.token_to_kv_pool_allocator.free(
+            kv_indices[len(req.prefix_indices) : new_prefix_len]
+        )
 
-        new_indices, new_last_node, _, _, _, _ = self.match_prefix(page_aligned_token_ids)
+        new_indices, new_last_node, _, _, _, _ = self.match_prefix(
+            page_aligned_token_ids
+        )
         self.req_to_token_pool.write(
             (req.req_pool_idx, slice(len(req.prefix_indices), len(new_indices))),
             new_indices[len(req.prefix_indices) :],
@@ -377,7 +362,7 @@ class ArtesiaExtensionCache(BasePrefixCache):
         leaves = self._collect_leaves()
         heapq.heapify(leaves)
 
-        selected_nodes: list[ExtensionTreeNode] = []
+        selected_nodes: list[ArtesiaTreeNode] = []
         selected_ids: set[int] = set()
         selected_page_specs: list[PageOffloadSpec] = []
         planned_evicted = 0
@@ -390,16 +375,12 @@ class ArtesiaExtensionCache(BasePrefixCache):
                 continue
             if node.value is None:
                 continue
-            if node.page_ids is None:
-                raise RuntimeError(
-                    "ArtesiaExtensionCache cannot evict a node without bound page ids. "
-                    f"node_id={node.id}"
-                )
 
             selected_nodes.append(node)
             selected_ids.add(node.id)
             planned_evicted += len(node.value)
-            selected_page_specs.extend(self._build_offload_specs(node))
+            if node.page_ids is not None:
+                selected_page_specs.extend(self._build_offload_specs(node))
 
             parent = node.parent
             if parent is not None and parent != self.root_node:
@@ -416,7 +397,7 @@ class ArtesiaExtensionCache(BasePrefixCache):
             self._delete_leaf(node)
             self._record_remove_event(node)
 
-    def inc_lock_ref(self, node: ExtensionTreeNode):
+    def inc_lock_ref(self, node: ArtesiaTreeNode):
         if self.disable:
             return 0
 
@@ -430,12 +411,7 @@ class ArtesiaExtensionCache(BasePrefixCache):
             node = node.parent
         return delta
 
-    def dec_lock_ref(
-        self,
-        node: ExtensionTreeNode,
-        swa_uuid_for_lock: Optional[str] = None,
-    ):
-        _ = swa_uuid_for_lock
+    def dec_lock_ref(self, node: ArtesiaTreeNode):
         if self.disable:
             return 0
 
@@ -488,7 +464,7 @@ class ArtesiaExtensionCache(BasePrefixCache):
             tag_list.append(("task_id", task_id))
         return SemanticDescription(tag_list=tag_list)
 
-    def _match_prefix_helper(self, node: ExtensionTreeNode, key: List[int]):
+    def _match_prefix_helper(self, node: ArtesiaTreeNode, key: List[int]):
         node.last_access_time = time.monotonic()
         if len(key) == 0:
             return [], node
@@ -515,11 +491,11 @@ class ArtesiaExtensionCache(BasePrefixCache):
     def _split_node(
         self,
         key: list[int],
-        child: ExtensionTreeNode,
+        child: ArtesiaTreeNode,
         split_len: int,
-    ) -> ExtensionTreeNode:
+    ) -> ArtesiaTreeNode:
         self._record_remove_event(child)
-        new_node = ExtensionTreeNode()
+        new_node = ArtesiaTreeNode()
         new_node.children = {self.get_child_key_fn(key[split_len:]): child}
         new_node.parent = child.parent
         new_node.lock_ref = child.lock_ref
@@ -540,7 +516,7 @@ class ArtesiaExtensionCache(BasePrefixCache):
 
     def _insert_helper(
         self,
-        node: ExtensionTreeNode,
+        node: ArtesiaTreeNode,
         key: List[int],
         value: torch.Tensor,
         page_ids: Optional[list[bytes]],
@@ -572,7 +548,7 @@ class ArtesiaExtensionCache(BasePrefixCache):
                 child_key = self.get_child_key_fn(key)
 
         if len(key):
-            new_node = ExtensionTreeNode()
+            new_node = ArtesiaTreeNode()
             new_node.parent = node
             new_node.key = key
             new_node.value = value
@@ -597,36 +573,18 @@ class ArtesiaExtensionCache(BasePrefixCache):
                 raise RuntimeError("Failed to bind page ids: radix path not found.")
             child = node.children[child_key]
             prefix_len = self.key_match_fn(child.key, remaining_key)
-            if prefix_len != len(child.key):
-                raise RuntimeError("Failed to bind page ids: non-exact radix match.")
-
             page_count = self._page_count_for_tokens(len(child.key))
             node_page_ids = remaining_page_ids[:page_count]
             if child.page_ids is None:
                 child.page_ids = list(node_page_ids)
-            elif child.page_ids != list(node_page_ids):
-                raise RuntimeError(
-                    f"Page-id mismatch while binding node {child.id}: "
-                    "existing page ids differ from logical registration."
-                )
 
             remaining_key = remaining_key[prefix_len:]
             remaining_page_ids = remaining_page_ids[page_count:]
             node = child
 
-        if remaining_page_ids:
-            raise RuntimeError("Failed to bind page ids: unconsumed page ids remain.")
-
-    def _build_offload_specs(self, node: ExtensionTreeNode) -> list[PageOffloadSpec]:
+    def _build_offload_specs(self, node: ArtesiaTreeNode) -> list[PageOffloadSpec]:
         if node.page_ids is None:
             return []
-        expected_page_count = self._page_count_for_tokens(len(node.key))
-        if len(node.page_ids) != expected_page_count:
-            raise RuntimeError(
-                "ArtesiaExtensionCache found misaligned page ids on eviction: "
-                f"node_id={node.id}, expected_pages={expected_page_count}, "
-                f"actual_pages={len(node.page_ids)}."
-            )
 
         specs = []
         for idx, page_id in enumerate(node.page_ids):
@@ -640,14 +598,14 @@ class ArtesiaExtensionCache(BasePrefixCache):
             )
         return specs
 
-    def _node_depth(self, node: ExtensionTreeNode) -> int:
+    def _node_depth(self, node: ArtesiaTreeNode) -> int:
         depth = 0
         while node != self.root_node:
             node = node.parent
             depth += 1
         return depth
 
-    def _collect_leaves(self) -> list[ExtensionTreeNode]:
+    def _collect_leaves(self) -> list[ArtesiaTreeNode]:
         ret = []
         stack = [self.root_node]
         while stack:
@@ -658,7 +616,7 @@ class ArtesiaExtensionCache(BasePrefixCache):
                 stack.extend(current.children.values())
         return ret
 
-    def _delete_leaf(self, node: ExtensionTreeNode) -> None:
+    def _delete_leaf(self, node: ArtesiaTreeNode) -> None:
         for child_key, child in node.parent.children.items():
             if child == node:
                 break
@@ -675,7 +633,7 @@ class ArtesiaExtensionCache(BasePrefixCache):
                 stack.append(child)
         return total_size
 
-    def _print_helper(self, node: ExtensionTreeNode, indent: int) -> None:
+    def _print_helper(self, node: ArtesiaTreeNode, indent: int) -> None:
         stack = [(node, indent)]
         while stack:
             current, current_indent = stack.pop()
@@ -692,7 +650,7 @@ class ArtesiaExtensionCache(BasePrefixCache):
                     child.key
                 ), f"{child_key=}, {self.get_child_key_fn(child.key)=}"
 
-    def _record_store_event(self, node: ExtensionTreeNode) -> None:
+    def _record_store_event(self, node: ArtesiaTreeNode) -> None:
         if self.enable_kv_cache_events:
             if node.parent is None:
                 parent_block_hash = None
@@ -719,7 +677,7 @@ class ArtesiaExtensionCache(BasePrefixCache):
                 )
                 parent_block_hash = block_hash
 
-    def _record_remove_event(self, node: ExtensionTreeNode) -> None:
+    def _record_remove_event(self, node: ArtesiaTreeNode) -> None:
         if self.enable_kv_cache_events:
             for start in range(0, len(node.key), self.page_size):
                 page_tokens = node.key[start : start + self.page_size]
