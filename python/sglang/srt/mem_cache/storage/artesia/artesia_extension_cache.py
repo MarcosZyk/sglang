@@ -19,15 +19,14 @@ from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
 from sglang.srt.mem_cache.radix_cache import _key_match_page_size1, _key_match_paged
 
 try:
+    from artesia.connector.extension_connector import (
+        ArtesiaExtensionConnector,
+        PageOffloadSpec,
+    )
     from artesia.service.common import (
         ContextDescription,
         ModelDescription,
         SemanticDescription,
-    )
-
-    from sglang.srt.mem_cache.storage.artesia.artesia_extension_connector import (
-        ArtesiaExtensionConnector,
-        PageOffloadSpec,
     )
 except ImportError as e:
     raise RuntimeError("Artesia is not installed.") from e
@@ -306,7 +305,9 @@ class ArtesiaExtensionCache(BasePrefixCache):
 
         context = ContextDescription(token_ids=aligned_token_ids, offset=0)
         semantics = self._build_semantics(req.agent_id, req.task_id)
-        register_result = self.artesia_connector.register_pages(context, semantics)
+        register_result = self.artesia_connector.register_pages(
+            context, semantics, page_aligned_kv_indices
+        )
         self._bind_page_ids(aligned_token_ids, register_result.page_ids)
 
         self.req_to_token_pool.free(req.req_pool_idx)
