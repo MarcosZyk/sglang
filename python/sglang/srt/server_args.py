@@ -196,6 +196,7 @@ class ServerArgs:
     hicache_storage_backend: Optional[str] = None
     # Artesia
     enable_artesia: bool = False
+    enable_artesia_extension_cache: bool = False
     enable_tree_log: bool = False
 
     # Double Sparsity
@@ -1440,6 +1441,14 @@ class ServerArgs:
             help="Using Artesia as an alternative hierarchical cache solution",
         )
         parser.add_argument(
+            "--enable-artesia-extension-cache",
+            action="store_true",
+            help=(
+                "Using the experimental Artesia extension cache path with "
+                "eviction-time offload"
+            ),
+        )
+        parser.add_argument(
             "--enable-tree-log",
             action="store_true",
             help="Store radix-tree modifications into logs for offline analysis.",
@@ -1827,6 +1836,12 @@ class ServerArgs:
             # FIXME
             and (self.lora_paths is None or self.disable_radix_cache)
         ), "compatibility of lora and radix attention is in progress"
+        assert not (
+            self.enable_artesia and self.enable_artesia_extension_cache
+        ), (
+            "--enable-artesia and --enable-artesia-extension-cache are mutually "
+            "exclusive"
+        )
         assert self.base_gpu_id >= 0, "base_gpu_id must be non-negative"
         assert self.gpu_id_step >= 1, "gpu_id_step must be positive"
 
