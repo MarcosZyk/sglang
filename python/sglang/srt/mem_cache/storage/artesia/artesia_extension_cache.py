@@ -47,6 +47,7 @@ class ArtesiaTreeNode:
         self.key: list[int] = []
         self.value: Optional[torch.Tensor] = None
         self.page_ids: Optional[list[bytes]] = None
+        self.page_end_offsets: Optional[list[int]] = None
         self.lock_ref = 0
         self.last_access_time = time.monotonic()
         self.id = ArtesiaTreeNode.counter
@@ -75,7 +76,7 @@ class ArtesiaExtensionCache(BasePrefixCache):
         tp_group: Optional[torch.distributed.ProcessGroup] = None,
         enable_tree_log: bool = False,
     ):
-        _ = page_size, tp_size, tp_group, enable_tree_log
+        _ = tp_size, tp_group, enable_tree_log
         self.req_to_token_pool = req_to_token_pool
         self.token_to_kv_pool_allocator = token_to_kv_pool_allocator
         self.disable = disable
@@ -88,10 +89,11 @@ class ArtesiaExtensionCache(BasePrefixCache):
             self.device = torch.device("cpu")
 
         # Keep the constructor signature compatible with other cache
-        # implementations, but use the Artesia handshake as the single
-        # source of truth for page size.
-        self.page_size = 1
-        self._configure_page_layout(self.page_size)
+        # implementations, while keeping SGLang-local paging logic and
+        # Artesia paging logic explicit.
+        self.sglang_page_size = page_size
+        self.artesia_page_size = 1
+        self._configure_page_layout(self.sglang_page_size)
 
         self.k_pool = None
         self.v_pool = None
@@ -133,17 +135,18 @@ class ArtesiaExtensionCache(BasePrefixCache):
                 kv_pool=self.kv_pool,
             )
             self.artesia_connector.open()
-            self.page_size = self.artesia_connector.resolve_model_page_size(
+            self.artesia_page_size = self.artesia_connector.resolve_model_page_size(
                 self.model_description
             )
-            self._configure_page_layout(self.page_size)
             logger.info(
                 "Open Artesia extension connection with config: local_rank=%s, "
-                "device=%s, model_description=%s, page_size=%s",
+                "device=%s, model_description=%s, sglang_page_size=%s, "
+                "artesia_page_size=%s",
                 device.index,
                 device,
                 self.model_description,
-                self.page_size,
+                self.sglang_page_size,
+                self.artesia_page_size,
             )
 
         self.reset()
@@ -162,6 +165,7 @@ class ArtesiaExtensionCache(BasePrefixCache):
         self.root_node.key = []
         self.root_node.value = []
         self.root_node.page_ids = []
+        self.root_node.page_end_offsets = []
         self.root_node.lock_ref = 1
         self.evictable_size_ = 0
         self.protected_size_ = 0
@@ -175,8 +179,8 @@ class ArtesiaExtensionCache(BasePrefixCache):
                 last_host_node=self.root_node,
             )
 
-        if self.page_size != 1:
-            aligned_len = len(key) // self.page_size * self.page_size
+        if self.sglang_page_size != 1:
+            aligned_len = len(key) // self.sglang_page_size * self.sglang_page_size
             key = key[:aligned_len]
 
         value_parts, last_node = self._match_prefix_helper(self.root_node, key)
@@ -193,21 +197,13 @@ class ArtesiaExtensionCache(BasePrefixCache):
             num_global_cache=0,
         )
 
+        prefix_page_id, anchor_token_count = self._get_load_anchor(last_node)
+        # Artesia suffix navigation must continue from the last completed
+        # Artesia page, not from the current radix leaf boundary.
+        suffix_token_ids = key[anchor_token_count:]
         uncached_len = len(key) - value.numel()
         if uncached_len == 0:
             return base_res
-
-        if last_node == self.root_node:
-            prefix_page_id = b""
-        else:
-            prefix_page_id = last_node.get_last_page_id()
-            if prefix_page_id is None:
-                logger.info(
-                    "Skip Artesia extension load because matched node %s has no "
-                    "bound page ids yet.",
-                    last_node.id,
-                )
-                return base_res
 
         if self.token_to_kv_pool_allocator.available_size() < uncached_len:
             self.inc_lock_ref(last_node)
@@ -219,7 +215,6 @@ class ArtesiaExtensionCache(BasePrefixCache):
             return base_res
 
         semantics = self._build_semantics(kwargs.get("agent_id"), kwargs.get("task_id"))
-        suffix_token_ids = key[value.numel() :]
         try:
             load_result = self.artesia_connector.load_kv_by_suffix(
                 prefix_page_id=prefix_page_id,
@@ -231,8 +226,12 @@ class ArtesiaExtensionCache(BasePrefixCache):
             self.token_to_kv_pool_allocator.free(token_slots)
             raise
 
-        num_retrieved = load_result.num_retrieved
-        fetched = num_retrieved - (num_retrieved % self.page_size)
+        fetched, fetched_page_ids = self._normalize_loaded_pages(
+            num_retrieved=load_result.num_retrieved,
+            page_ids=load_result.page_ids,
+            max_tokens=token_slots.shape[0],
+            prefix_token_count=value.numel(),
+        )
         if fetched == 0:
             self.token_to_kv_pool_allocator.free(token_slots)
             return base_res
@@ -244,8 +243,12 @@ class ArtesiaExtensionCache(BasePrefixCache):
         end = start + fetched
         new_node.key = key[start:end]
         new_node.value = token_slots[:fetched]
-        new_node.page_ids = list(load_result.page_ids)
         new_node.parent = last_node
+        page_end_offsets = self._page_end_offsets_for_span(start, fetched)
+        page_count = min(len(page_end_offsets), len(fetched_page_ids))
+        if page_count > 0:
+            new_node.page_ids = list(fetched_page_ids[:page_count])
+            new_node.page_end_offsets = page_end_offsets[:page_count]
         last_node.children[self.get_child_key_fn(new_node.key)] = new_node
         self.evictable_size_ += fetched
         self._record_store_event(new_node)
@@ -287,8 +290,10 @@ class ArtesiaExtensionCache(BasePrefixCache):
             req.req_pool_idx, : len(token_ids)
         ]
 
-        if self.page_size != 1:
-            page_aligned_len = len(kv_indices) // self.page_size * self.page_size
+        if self.sglang_page_size != 1:
+            page_aligned_len = (
+                len(kv_indices) // self.sglang_page_size * self.sglang_page_size
+            )
             page_aligned_kv_indices = kv_indices[:page_aligned_len].to(
                 dtype=torch.int64, copy=True
             )
@@ -303,12 +308,14 @@ class ArtesiaExtensionCache(BasePrefixCache):
             kv_indices[len(req.prefix_indices) : new_prefix_len]
         )
 
-        context = ContextDescription(token_ids=aligned_token_ids, offset=0)
-        semantics = self._build_semantics(req.agent_id, req.task_id)
-        register_result = self.artesia_connector.register_pages(
-            context, semantics, page_aligned_kv_indices
-        )
-        self._bind_page_ids(aligned_token_ids, register_result.page_ids)
+        if new_prefix_len < page_aligned_len:
+            canonical_indices, _, _, _, _, _ = self.match_prefix(aligned_token_ids)
+            self._register_local_pages(
+                aligned_token_ids,
+                canonical_indices,
+                req.agent_id,
+                req.task_id,
+            )
 
         self.req_to_token_pool.free(req.req_pool_idx)
         self.dec_lock_ref(req.last_node)
@@ -322,8 +329,10 @@ class ArtesiaExtensionCache(BasePrefixCache):
             req.req_pool_idx, : len(token_ids)
         ]
 
-        if self.page_size != 1:
-            page_aligned_len = len(kv_indices) // self.page_size * self.page_size
+        if self.sglang_page_size != 1:
+            page_aligned_len = (
+                len(kv_indices) // self.sglang_page_size * self.sglang_page_size
+            )
             page_aligned_kv_indices = kv_indices[:page_aligned_len].to(
                 dtype=torch.int64, copy=True
             )
@@ -340,6 +349,12 @@ class ArtesiaExtensionCache(BasePrefixCache):
         new_indices, new_last_node, _, _, _, _ = self.match_prefix(
             page_aligned_token_ids
         )
+        self._register_local_pages(
+            page_aligned_token_ids,
+            new_indices,
+            req.agent_id,
+            req.task_id,
+        )
         self.req_to_token_pool.write(
             (req.req_pool_idx, slice(len(req.prefix_indices), len(new_indices))),
             new_indices[len(req.prefix_indices) :],
@@ -348,7 +363,7 @@ class ArtesiaExtensionCache(BasePrefixCache):
         self.dec_lock_ref(req.last_node)
         self.inc_lock_ref(new_last_node)
 
-        if self.page_size != 1:
+        if self.sglang_page_size != 1:
             req.prefix_indices = torch.cat(
                 [new_indices, kv_indices[len(new_indices) :]]
             )
@@ -444,14 +459,47 @@ class ArtesiaExtensionCache(BasePrefixCache):
         self.kv_event_queue = []
         return ret
 
-    def _page_count_for_tokens(self, token_count: int) -> int:
-        if token_count == 0:
-            return 0
-        if token_count % self.page_size != 0:
-            raise RuntimeError(
-                f"Token count {token_count} is not aligned to page size {self.page_size}."
+    def _align_down(self, token_count: int, page_size: int) -> int:
+        if page_size <= 1:
+            return token_count
+        return token_count // page_size * page_size
+
+    def _normalize_loaded_pages(
+        self,
+        num_retrieved: int,
+        page_ids: list[bytes],
+        max_tokens: int,
+        prefix_token_count: int,
+    ) -> tuple[int, list[bytes]]:
+        if num_retrieved <= 0 or len(page_ids) == 0 or max_tokens <= 0:
+            return 0, []
+
+        fetched = self._align_down(
+            min(num_retrieved, max_tokens),
+            self.sglang_page_size,
+        )
+        step = self.sglang_page_size if self.sglang_page_size > 1 else 1
+        while fetched > 0:
+            page_count = len(
+                self._page_end_offsets_for_span(prefix_token_count, fetched)
             )
-        return token_count // self.page_size
+            if page_count <= len(page_ids):
+                return fetched, list(page_ids[:page_count])
+            fetched -= step
+        return 0, []
+
+    def _truncate_register_inputs(
+        self,
+        token_ids: list[int],
+        kv_indices: torch.Tensor,
+    ) -> tuple[list[int], torch.Tensor]:
+        register_len = self._align_down(
+            min(len(token_ids), kv_indices.shape[0]),
+            self.sglang_page_size,
+        )
+        if register_len == 0:
+            return [], kv_indices[:0]
+        return token_ids[:register_len], kv_indices[:register_len]
 
     def _build_semantics(
         self,
@@ -502,10 +550,23 @@ class ArtesiaExtensionCache(BasePrefixCache):
         new_node.lock_ref = child.lock_ref
         new_node.key = child.key[:split_len]
         new_node.value = child.value[:split_len]
-        prefix_page_count = self._page_count_for_tokens(split_len)
-        if child.page_ids is not None:
-            new_node.page_ids = child.page_ids[:prefix_page_count]
-            child.page_ids = child.page_ids[prefix_page_count:]
+        if child.page_ids is not None and child.page_end_offsets is not None:
+            split_idx = 0
+            while (
+                split_idx < len(child.page_end_offsets)
+                and child.page_end_offsets[split_idx] <= split_len
+            ):
+                split_idx += 1
+            if split_idx > 0:
+                new_node.page_ids = child.page_ids[:split_idx]
+                new_node.page_end_offsets = child.page_end_offsets[:split_idx]
+                child.page_ids = child.page_ids[split_idx:]
+                child.page_end_offsets = [
+                    offset - split_len for offset in child.page_end_offsets[split_idx:]
+                ]
+                if len(child.page_ids) == 0:
+                    child.page_ids = None
+                    child.page_end_offsets = None
         child.parent = new_node
         child.key = child.key[split_len:]
         child.value = child.value[split_len:]
@@ -533,12 +594,13 @@ class ArtesiaExtensionCache(BasePrefixCache):
         while len(key) > 0 and child_key in node.children:
             node = node.children[child_key]
             node.last_access_time = time.monotonic()
+            prefix_start = self._node_global_start(node)
             prefix_len = self.key_match_fn(node.key, key)
             total_prefix_length += prefix_len
             key = key[prefix_len:]
             value = value[prefix_len:]
             if remaining_page_ids is not None:
-                consumed = self._page_count_for_tokens(prefix_len)
+                consumed = len(self._page_end_offsets_for_span(prefix_start, prefix_len))
                 remaining_page_ids = remaining_page_ids[consumed:]
 
             if prefix_len < len(node.key):
@@ -553,16 +615,20 @@ class ArtesiaExtensionCache(BasePrefixCache):
             new_node.parent = node
             new_node.key = key
             new_node.value = value
-            new_node.page_ids = (
-                list(remaining_page_ids) if remaining_page_ids is not None else None
-            )
+            if remaining_page_ids is not None:
+                prefix_start = self._node_global_end(node)
+                page_end_offsets = self._page_end_offsets_for_span(prefix_start, len(key))
+                page_count = min(len(page_end_offsets), len(remaining_page_ids))
+                if page_count > 0:
+                    new_node.page_ids = list(remaining_page_ids[:page_count])
+                    new_node.page_end_offsets = page_end_offsets[:page_count]
             node.children[child_key] = new_node
             self.evictable_size_ += len(value)
             self._record_store_event(new_node)
         return total_prefix_length
 
     def _bind_page_ids(self, key: list[int], page_ids: list[bytes]) -> None:
-        if len(key) == 0:
+        if len(key) == 0 or len(page_ids) == 0:
             return
 
         node = self.root_node
@@ -574,30 +640,132 @@ class ArtesiaExtensionCache(BasePrefixCache):
                 raise RuntimeError("Failed to bind page ids: radix path not found.")
             child = node.children[child_key]
             prefix_len = self.key_match_fn(child.key, remaining_key)
-            page_count = self._page_count_for_tokens(len(child.key))
+            prefix_start = self._node_global_start(child)
+            node_page_end_offsets = self._page_end_offsets_for_span(
+                prefix_start, prefix_len
+            )
+            page_count = len(node_page_end_offsets)
             node_page_ids = remaining_page_ids[:page_count]
-            if child.page_ids is None:
-                child.page_ids = list(node_page_ids)
+            if page_count > 0 and len(node_page_ids) > 0:
+                if child.page_ids is None:
+                    child.page_ids = []
+                    child.page_end_offsets = []
+                existing_count = len(child.page_ids)
+                if existing_count < page_count:
+                    child.page_ids.extend(node_page_ids[existing_count:page_count])
+                    child.page_end_offsets.extend(
+                        node_page_end_offsets[existing_count:page_count]
+                    )
 
             remaining_key = remaining_key[prefix_len:]
             remaining_page_ids = remaining_page_ids[page_count:]
+            if page_count > len(node_page_ids):
+                break
             node = child
 
+    def _register_local_pages(
+        self,
+        token_ids: list[int],
+        kv_indices: torch.Tensor,
+        agent_id: Optional[str],
+        task_id: Optional[str],
+    ) -> None:
+        register_token_ids, register_kv_indices = self._truncate_register_inputs(
+            token_ids, kv_indices
+        )
+        if len(register_token_ids) == 0:
+            return
+
+        context = ContextDescription(token_ids=register_token_ids, offset=0)
+        semantics = self._build_semantics(agent_id, task_id)
+        register_result = self.artesia_connector.register_pages(
+            context, semantics, register_kv_indices
+        )
+        page_count = len(self._page_end_offsets_for_span(0, len(register_token_ids)))
+        self._bind_page_ids(register_token_ids, register_result.page_ids[:page_count])
+
     def _build_offload_specs(self, node: ArtesiaTreeNode) -> list[PageOffloadSpec]:
-        if node.page_ids is None:
+        if node.page_ids is None or node.page_end_offsets is None:
             return []
 
         specs = []
-        for idx, page_id in enumerate(node.page_ids):
-            begin = idx * self.page_size
-            end = begin + self.page_size
+        for page_id, page_end_offset in zip(node.page_ids, node.page_end_offsets):
             specs.append(
                 PageOffloadSpec(
                     page_id=page_id,
-                    kv_indices=node.value[begin:end],
+                    kv_indices=self._collect_page_kv_indices(node, page_end_offset),
                 )
             )
         return specs
+
+    def _get_load_anchor(self, node: ArtesiaTreeNode) -> tuple[bytes, int]:
+        current = node
+        while current != self.root_node:
+            if current.page_ids and current.page_end_offsets:
+                return (
+                    current.page_ids[-1],
+                    self._node_global_start(current) + current.page_end_offsets[-1],
+                )
+            current = current.parent
+        return b"", 0
+
+    def _node_global_start(self, node: ArtesiaTreeNode) -> int:
+        total = 0
+        current = node.parent
+        while current is not None:
+            total += len(current.key)
+            current = current.parent
+        return total
+
+    def _node_global_end(self, node: ArtesiaTreeNode) -> int:
+        return self._node_global_start(node) + len(node.key)
+
+    def _page_end_offsets_for_span(
+        self,
+        prefix_start: int,
+        span_len: int,
+    ) -> list[int]:
+        if span_len <= 0:
+            return []
+
+        first_page_end = (
+            (prefix_start + self.artesia_page_size - 1) // self.artesia_page_size
+        ) * self.artesia_page_size
+        if first_page_end <= prefix_start:
+            first_page_end += self.artesia_page_size
+
+        prefix_end = prefix_start + span_len
+        page_end_offsets = []
+        page_end = first_page_end
+        while page_end <= prefix_end:
+            page_end_offsets.append(page_end - prefix_start)
+            page_end += self.artesia_page_size
+        return page_end_offsets
+
+    def _collect_page_kv_indices(
+        self,
+        node: ArtesiaTreeNode,
+        page_end_offset: int,
+    ) -> torch.Tensor:
+        page_end = self._node_global_start(node) + page_end_offset
+        page_begin = page_end - self.artesia_page_size
+        value_parts = []
+        current = node
+        while current != self.root_node:
+            current_start = self._node_global_start(current)
+            current_end = current_start + len(current.key)
+            overlap_begin = max(page_begin, current_start)
+            overlap_end = min(page_end, current_end)
+            if overlap_begin < overlap_end:
+                local_begin = overlap_begin - current_start
+                local_end = overlap_end - current_start
+                value_parts.append(current.value[local_begin:local_end])
+            current = current.parent
+
+        if len(value_parts) == 1:
+            return value_parts[0]
+        value_parts.reverse()
+        return torch.cat(value_parts)
 
     def _node_depth(self, node: ArtesiaTreeNode) -> int:
         depth = 0
@@ -657,13 +825,13 @@ class ArtesiaExtensionCache(BasePrefixCache):
                 parent_block_hash = None
             else:
                 last_page_start = (
-                    (len(node.parent.key) - 1) // self.page_size
-                ) * self.page_size
+                    (len(node.parent.key) - 1) // self.sglang_page_size
+                ) * self.sglang_page_size
                 parent_parent_tokens = node.parent.key[last_page_start:]
                 parent_block_hash = hash(tuple(parent_parent_tokens))
 
-            for start in range(0, len(node.key), self.page_size):
-                page_tokens = node.key[start : start + self.page_size]
+            for start in range(0, len(node.key), self.sglang_page_size):
+                page_tokens = node.key[start : start + self.sglang_page_size]
                 if not page_tokens:
                     continue
                 block_hash = hash(tuple(page_tokens))
@@ -680,8 +848,8 @@ class ArtesiaExtensionCache(BasePrefixCache):
 
     def _record_remove_event(self, node: ArtesiaTreeNode) -> None:
         if self.enable_kv_cache_events:
-            for start in range(0, len(node.key), self.page_size):
-                page_tokens = node.key[start : start + self.page_size]
+            for start in range(0, len(node.key), self.sglang_page_size):
+                page_tokens = node.key[start : start + self.sglang_page_size]
                 if not page_tokens:
                     continue
                 self.kv_event_queue.append(
