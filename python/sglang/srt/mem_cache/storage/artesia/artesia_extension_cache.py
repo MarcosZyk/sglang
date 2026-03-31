@@ -128,8 +128,9 @@ class ArtesiaExtensionCache(BasePrefixCache):
             )
 
             device = self.k_pool[0].device
+            local_rank = rank if device.index is None else device.index
             self.artesia_connector = ArtesiaExtensionConnector(
-                local_rank=device.index,
+                local_rank=local_rank,
                 device=device,
                 model=self.model_description,
                 kv_pool=self.kv_pool,
@@ -142,7 +143,7 @@ class ArtesiaExtensionCache(BasePrefixCache):
                 "Open Artesia extension connection with config: local_rank=%s, "
                 "device=%s, model_description=%s, sglang_page_size=%s, "
                 "artesia_page_size=%s",
-                device.index,
+                local_rank,
                 device,
                 self.model_description,
                 self.sglang_page_size,
