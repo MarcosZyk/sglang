@@ -121,7 +121,7 @@ class ArtesiaExtensionCache(BasePrefixCache):
             self.kv_pool = [self.k_pool, self.v_pool]
 
             self.model_description = ModelDescription(
-                model_name=f"{model_config.model_path}-{rank}",
+                model_name=model_config.model_path,
                 dtype=kvcache.store_dtype,
                 layer_num=kvcache.layer_num,
                 kv_shape=torch.Size([2, kvcache.head_num, kvcache.head_dim]),
