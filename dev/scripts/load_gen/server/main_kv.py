@@ -239,12 +239,15 @@ def append_gitkv_commands(
             commands.append(f"gitkv branch {agent_id} {gitkv_task_id} {branch}")
 
     if not task_state["is_loop_task"]:
+        commands.append(f"gitkv generation") # 执行LLM调用 
         stash_list = list(range(0, m + 1))
         commands.append(f"gitkv stash {agent_id} {gitkv_task_id} {stash_list}")
     elif branch_name is not None:
         if task_state["current_branch"] != branch_name:
             commands.append(f"gitkv checkout {agent_id} {gitkv_task_id} {branch_name}")
             task_state["current_branch"] = branch_name
+
+        commands.append(f"gitkv generation") # 执行LLM调用 
         stash_list = list(range(1, m + 1))
         commands.append(f"gitkv stash {agent_id} {gitkv_task_id} {stash_list}")
     else:
@@ -262,6 +265,8 @@ def append_gitkv_commands(
 
         if not skip_rebase:
             commands.append(f"gitkv rebase {agent_id} {gitkv_task_id} {rebase_index}")
+
+        commands.append(f"gitkv generation") # 执行LLM调用 
 
         commit_list = list(range(rebase_index, m + 1))
         commands.append(f"gitkv commit {agent_id} {gitkv_task_id} {commit_list}")
