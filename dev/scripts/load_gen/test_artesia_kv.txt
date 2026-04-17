@@ -1,0 +1,35 @@
+请读取dev/scripts/load_gen/server中的代码(特别关注main.py)， 这是我写的replay agent trace的请求的LLM调用的服务端，用于仿真agent请求的执行过程。
+并且请阅读dec/scripts/load_gen/output_aone/replay_data中的json文件。
+
+我想你加入以下功能， 在每次LLM调用 (也就是openai.chat.completions.create调用)前或后加入一些agent的artesia的原语操作(字符串表示)，判断生成的内容的去留情况，具体设计思路如下：
+在每一次调用LLM之前， 构造一个context_id和call_id。 
+context_id 可以为 {agent_id}_{task_type}_{semantic_type} (如果semantic_type为NULL， 则semantic_type可以定义为"main");
+call_id 可以为{agent_id}_{iteration} (或者其他的更合适也行， 只要保证每个请求每次LLM调用的id不一致即可)。
+
+首先检查task_type， 如果task_type中不包含任何特定语义信息， 则判定为非循环subagent。 特定语义信息为一个List， 由用户提前指定好(例如 "iFlow CLI“等等, 每一项为一个str)。对于task_type 包含某个语义信息(例如iFlow CLI)， 则继续判定：若当前这一轮LLM调用的语义信息"semantic type"为Null，则判定为循环subagent， 否则为循环subagent中的衍生subagent。
+
+当一个{agent_id}_{task_type}_{semantic_type}的LLM首轮调用时， 创建一个唯一标记 {context_id} (对于agent_id的唯一标记， 不同agent_id对应的task_id可以保持一样)， 并且在completion后插入原语"artesia.create({agent_id}, {context_id})" (确保其为{context_id}的第一条命令)。 如果对于这个{task_type}中有多个{semantic_type}时，这个task_type存在多个{context_id}对应到不同的{semantic_type}。
+
+同时每个agent请求维护一个状态记录当前这个agent请求处在哪个{context_id}当中， 如果即将运行的LLM的{context_id} 和这个agent请求当前处在的{context_id}不一致， 则调用"artesia.offload({current task id}, duration=None)"(当前context_id短期不用，可以offload), 并且调用"artesia.fetch({new_task_id})"。并设置当前这个agent请求的状态在{context_id}中。 如果相同则不用offload，仅仅调用fetch即可
+
+当一次LLM调用被判定为非循环subagent，则当前轮生成的所有信息均为再也不需要的message。 
+因此， 在非循环subagent的LLM调用开始时, 调用原语 "artesia.reject({call_id})"
+
+如果是循环subagent内的衍生subagent，其生成出来的所有信息也均为再也不需要的message。
+在这些衍生subagent调用结束后，获取message_list的长度 length = len(message_list), stash_list = range(1, length+1) (system prompt还是需要的) 在completion后插入原语
+"artesia.tag({context_id}, 0)", 以及"artesia.truncate({context_id}, {stash_list})"
+
+当一次LLM调用被判定为循环subagent， 则当前message list和生成的内容需要tag到其中，然而还需要考虑prefix cache命中情况， 没有命中的部分需要truncate， 具体操作方法如下。
+逐一比较"a_list_item", 和"b_list_item"中的各项 (假设总共m=len(a_list_item)项)， 找到首个b_list_item[p] < a_list_item[p]， 并设置rebase_item = p。 
+此时在LLM调用前插入原语"artesia.truncate({context_id}, {p})" (代表恢复message_list[p:]之后的内容都需要删除掉)
+假设当前轮LLM调用的prefix 缓存第t轮(记录在prefix_pos当中) 如果p为第t轮LLM调用的a_list_item长度，则不需要插入"artesia.truncate({context_id}, {p})" 
+令commit_list = range(p, m+1)
+执行LLM调用结束后。
+然后插入原语"artesia.tag({context_id}, {commit_list})"。
+在此之后调用原语"artesia.offload({context_id}, duration={wait_time})" (这里代表tools工具调用)
+
+当一个task_type的LLM的最后一轮调用时， 在completion后插入原语"artesia.delete({context_id})" (确保其为该{context}的最后一个命令)
+
+最终将上述命令按顺序保存在命令集合中 (可以定义为一个List[Str]), 数组中每一项为一个artesia原语操作，由一个字符串表示。
+
+请根据上述信息修改server/main.py的代码， 但是不要修改原来的逻辑， 请为我建立一个新的脚本main_xx.py。(xx你自己起名字，剪短一点)
