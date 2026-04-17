@@ -150,6 +150,11 @@ def build_context_id(agent_id: str, task_type: str, semantic_type: Optional[str]
     return f"ctx_{agent_id}_{task_hash}_{semantic_slug}"
 
 
+def build_fallback_context_id(task_type: int) -> str:
+    """为无 Artesia 元数据的请求构造稳定的内部上下文 key。"""
+    return f"task-{task_type}"
+
+
 def build_call_id(agent_id: str, round_idx: int) -> str:
     return f"call_{agent_id}_{round_idx}"
 
@@ -220,7 +225,11 @@ def build_artesia_context(req: SimRequest, agent_id: str) -> Optional[Dict[str, 
     }
 
 
-def find_rebase_index(a_row: List[int], b_row: List[int], m: int) -> int:
+def find_rebase_index(
+    a_row: List[int],
+    b_row: List[int],
+    m: int,
+) -> int:
     """找到首个缓存未命中的 message 索引。"""
     for idx in range(m):
         if b_row[idx] < a_row[idx]:
@@ -228,19 +237,53 @@ def find_rebase_index(a_row: List[int], b_row: List[int], m: int) -> int:
     return m
 
 
-def should_skip_truncate(
-    req: SimRequest,
-    artesia_context: Dict[str, Any],
+# Disabled by design for the current replay semantics:
+#
+# def should_skip_truncate(
+#     source_round_ids: Optional[List[List[int]]],
+#     current_round_prompt_token_ids: List[List[int]],
+#     rebase_index: int,
+# ) -> bool:
+#     return (
+#         source_round_ids is not None
+#         and len(source_round_ids) <= len(current_round_prompt_token_ids)
+#         and rebase_index == len(source_round_ids)
+#     )
+
+
+def resolve_context_cache_id(
+    artesia_context: Optional[Dict[str, Any]],
     round_idx: int,
-    rebase_index: int,
-) -> bool:
+    task_type: int,
+) -> str:
+    if artesia_context is not None:
+        return artesia_context["context_id_list"][round_idx]
+    return build_fallback_context_id(task_type)
+
+
+def validate_prefix_pos_context(
+    req: SimRequest,
+    artesia_context: Optional[Dict[str, Any]],
+    round_idx: int,
+    context_id: str,
+) -> None:
+    """记录 prefix_pos 指向不同 context 的情况，便于排查 replay 元数据问题。"""
+    if artesia_context is None or req.prefix_pos_list is None:
+        return
+
     prefix_round = artesia_context["prefix_pos_list"][round_idx]
-    return (
-        prefix_round >= 0
-        and req.a_list is not None
-        and prefix_round < len(req.a_list)
-        and rebase_index == len(req.a_list[prefix_round])
-    )
+    if prefix_round < 0 or prefix_round >= req.n:
+        return
+
+    prefix_context_id = artesia_context["context_id_list"][prefix_round]
+    if prefix_context_id != context_id:
+        logger.warning(
+            "Round %s uses context %s but prefix_pos=%s points to context %s",
+            round_idx,
+            context_id,
+            prefix_round,
+            prefix_context_id,
+        )
 
 
 def append_common_pre_commands(
@@ -283,13 +326,12 @@ def append_common_post_commands(
 def append_artesia_commands_for_round(
     commands: List[str],
     artesia_context: Optional[Dict[str, Any]],
-    req: SimRequest,
     round_idx: int,
     agent_id: str,
     current_context_id: Optional[str],
     m: int,
     a_row: List[int],
-    b_row: List[int],
+    effective_b_row: List[int],
 ) -> Optional[str]:
     if artesia_context is None:
         return current_context_id
@@ -311,9 +353,15 @@ def append_artesia_commands_for_round(
         return current_context_id
 
     if classification == "loop_main":
-        rebase_index = find_rebase_index(a_row, b_row, m)
-        if not should_skip_truncate(req, artesia_context, round_idx, rebase_index):
-            commands.append(f"artesia.truncate({context_id}, {rebase_index})")
+        rebase_index = find_rebase_index(a_row, effective_b_row, m)
+        # Disabled by design for the current replay semantics:
+        # if not should_skip_truncate(
+        #     source_round_ids,
+        #     current_round_prompt_token_ids,
+        #     rebase_index,
+        # ):
+        #     commands.append(f"artesia.truncate({context_id}, {rebase_index})")
+        commands.append(f"artesia.truncate({context_id}, {rebase_index})")
         return current_context_id
 
     return current_context_id
@@ -326,7 +374,7 @@ def append_artesia_post_commands_for_round(
     round_idx: int,
     m: int,
     a_row: List[int],
-    b_row: List[int],
+    effective_b_row: List[int],
 ) -> Optional[str]:
     if artesia_context is None:
         return None
@@ -339,7 +387,7 @@ def append_artesia_post_commands_for_round(
         commands.append(f"artesia.tag({context_id}, 0)")
         commands.append(f"artesia.truncate({context_id}, {stash_list})")
     elif classification == "loop_main":
-        rebase_index = find_rebase_index(a_row, b_row, m)
+        rebase_index = find_rebase_index(a_row, effective_b_row, m)
         commit_list = list(range(rebase_index, m + 1))
         commands.append(f"artesia.tag({context_id}, {commit_list})")
         wait_time = req.wait_time[round_idx] if req.wait_time is not None else None
@@ -367,7 +415,7 @@ def simulate_sync(req_dict: Dict) -> Dict:
 
     file = open(f'../result/{rid}.csv', 'a', newline='', encoding='utf-8')
     csv_writer = csv.writer(file)
-    csv_writer.writerow(['task_type', 'num_prefill_tokens', 'num_decode_tokens', 'theoretical_cached_tokens', 'num_cached_tokens', 'prefill_time', 'sum_decode_time', 'tpot', 'p50_tpot', 'p95_tpot', 'num_local_cache_tokens', 'num_global_cached_tokens'])
+    csv_writer.writerow(['context_id', 'num_prefill_tokens', 'num_decode_tokens', 'theoretical_cached_tokens', 'num_cached_tokens', 'prefill_time', 'sum_decode_time', 'tpot', 'p50_tpot', 'p95_tpot', 'num_local_cache_tokens', 'num_global_cached_tokens'])
 
     start_time = time.perf_counter()
 
@@ -417,25 +465,27 @@ def simulate_sync(req_dict: Dict) -> Dict:
     current_context_id: Optional[str] = None
 
     # ========== 创建 OpenAI 客户端 ==========
-    client_list: List[OpenAI] = []
-    for port in range(12347, 12347 + req.n_task):
-        client_list.append(
-            OpenAI(
-                api_key="EMPTY",
-                base_url=f"http://localhost:{12347}/v1",
-                timeout=1800,  # 增加超时
-                max_retries=0
-            )
-        )
+    client = OpenAI(
+        api_key="EMPTY",
+        base_url="http://localhost:12347/v1",
+        timeout=1800,  # 增加超时
+        max_retries=0,
+    )
 
     # ========== 历史记录 ==========
-    history_rounds: List[List[List[Dict[str, str]]]] = [[] for _ in range(req.n_task)]
-    prev_msg_token_ids_per_round: List[List[List[List[int]]]] = [[] for _ in range(req.n_task)]
+    history_rounds_by_context: Dict[str, List[List[Dict[str, str]]]] = {}
+    round_prompt_token_ids_by_round: List[Optional[List[List[int]]]] = [None for _ in range(n)]
+    last_round_idx_by_context: Dict[str, int] = {}
 
     # ========== 主循环 - 保持顺序执行 ==========
     for i in range(n):
         m = m_list[i]
         task_type = req.task_list[i]
+        context_cache_id = resolve_context_cache_id(
+            artesia_context=artesia_context,
+            round_idx=i,
+            task_type=task_type,
+        )
 
         a_row = a_list[i]
         b_row = b_list[i]
@@ -450,7 +500,19 @@ def simulate_sync(req_dict: Dict) -> Dict:
 
         round_messages = []
         this_round_prompt_token_ids: List[List[int]] = []
-        client_type = 0 if task_type == 0 else 1
+        effective_b_row: List[int] = []
+        validate_prefix_pos_context(
+            req=req,
+            artesia_context=artesia_context,
+            round_idx=i,
+            context_id=context_cache_id,
+        )
+        source_round_idx = last_round_idx_by_context.get(context_cache_id)
+        source_round_ids = (
+            round_prompt_token_ids_by_round[source_round_idx]
+            if source_round_idx is not None
+            else None
+        )
         # 构建 m 条 message（保持顺序）
         for j in range(m):
             a_ij = int(a_row[j])
@@ -459,10 +521,9 @@ def simulate_sync(req_dict: Dict) -> Dict:
 
             # 获取上一轮的 token ids（保持依赖关系）
             reused_ids = []
-            if i > 0 and prev_msg_token_ids_per_round[task_type]:
-                prev_round_ids = prev_msg_token_ids_per_round[task_type][-1]
-                if j < len(prev_round_ids):
-                    prev_ids = prev_round_ids[j]
+            if source_round_ids is not None:
+                if j < len(source_round_ids):
+                    prev_ids = source_round_ids[j]
                     b_ij = min(b_ij, len(prev_ids), a_ij)
                     reused_ids = prev_ids[:b_ij]
                 else:
@@ -484,10 +545,11 @@ def simulate_sync(req_dict: Dict) -> Dict:
                 #clean_up_tokenization_spaces=True
             )
 
+            effective_b_row.append(b_ij)
             this_round_prompt_token_ids.append(token_ids)
             round_messages.append({role_j: prompt_text})
 
-        # flatten history_rounds -> messages
+        # flatten current round messages -> messages
         call_messages = []
         for item in round_messages:
             for key in item:
@@ -498,18 +560,17 @@ def simulate_sync(req_dict: Dict) -> Dict:
         current_context_id = append_artesia_commands_for_round(
             commands=artesia_commands,
             artesia_context=artesia_context,
-            req=req,
             round_idx=i,
             agent_id=rid,
             current_context_id=current_context_id,
             m=m,
             a_row=a_row,
-            b_row=b_row,
+            effective_b_row=effective_b_row,
         )
 
         # ========== LLM 调用（同步，但在线程池中执行） ==========
         try:
-            completion = client_list[client_type].chat.completions.create(
+            completion = client.chat.completions.create(
                 model=openai_model,
                 messages=call_messages,
                 max_tokens=s_list[i],
@@ -520,7 +581,7 @@ def simulate_sync(req_dict: Dict) -> Dict:
                     "ignore_eos": True  # 将参数放在这里
                 },
                 agent_id=rid,
-                task_id=task_type,
+                task_id=context_cache_id if artesia_context is not None else task_type,
             )
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"OpenAI API call failed: {e}")
@@ -537,10 +598,11 @@ def simulate_sync(req_dict: Dict) -> Dict:
 
         # 存储历史记录
         round_messages.append({"assistant": assistant_text})
-        history_rounds[task_type].append(round_messages)
+        history_rounds_by_context.setdefault(context_cache_id, []).append(round_messages)
 
         this_round_prompt_token_ids.append(assistant_token_ids)
-        prev_msg_token_ids_per_round[task_type].append(this_round_prompt_token_ids)
+        round_prompt_token_ids_by_round[i] = this_round_prompt_token_ids
+        last_round_idx_by_context[context_cache_id] = i
 
         post_context_id = append_artesia_post_commands_for_round(
             commands=artesia_commands,
@@ -549,7 +611,7 @@ def simulate_sync(req_dict: Dict) -> Dict:
             round_idx=i,
             m=m,
             a_row=a_row,
-            b_row=b_row,
+            effective_b_row=effective_b_row,
         )
         if artesia_context is not None:
             current_context_id = post_context_id
@@ -568,7 +630,7 @@ def simulate_sync(req_dict: Dict) -> Dict:
 
         calculate_cached_tokens = np.sum(b_row)
 
-        write_result = [task_type, completion.usage.prompt_tokens, completion.usage.completion_tokens, calculate_cached_tokens, cached_tokens, completion.prefill_time, sum_decode_time, avg_decode_time, p50_decode_time, p95_decode_time, completion.num_local_cache, completion.num_global_cache]
+        write_result = [context_cache_id, completion.usage.prompt_tokens, completion.usage.completion_tokens, calculate_cached_tokens, cached_tokens, completion.prefill_time, sum_decode_time, avg_decode_time, p50_decode_time, p95_decode_time, completion.num_local_cache, completion.num_global_cache]
         csv_writer.writerow(write_result)
 
         # 等待指定时间（模拟 tool 调用延迟）
@@ -583,8 +645,7 @@ def simulate_sync(req_dict: Dict) -> Dict:
     file.close()
 
     return {
-        "history_rounds": history_rounds,
-        "prev_msg_token_ids_per_round": prev_msg_token_ids_per_round,
+        "history_rounds_by_context": history_rounds_by_context,
         "processing_time_s": processing_time,
         "artesia_commands": artesia_commands,
     }
