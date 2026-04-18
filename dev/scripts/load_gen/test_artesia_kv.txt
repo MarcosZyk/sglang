@@ -8,7 +8,7 @@ call_id 可以为{agent_id}_{iteration} (或者其他的更合适也行， 只�
 
 首先检查task_type， 如果task_type中不包含任何特定语义信息， 则判定为非循环subagent。 特定语义信息为一个List， 由用户提前指定好(例如 "iFlow CLI“等等, 每一项为一个str)。对于task_type 包含某个语义信息(例如iFlow CLI)， 则继续判定：若当前这一轮LLM调用的语义信息"semantic type"为Null，则判定为循环subagent， 否则为循环subagent中的衍生subagent。
 
-当一个{agent_id}_{task_type}_{semantic_type}的LLM首轮调用时， 创建一个唯一标记 {context_id} (对于agent_id的唯一标记， 不同agent_id对应的task_id可以保持一样)， 并且在completion后插入原语"artesia.create({agent_id}, {context_id})" (确保其为{context_id}的第一条命令)。 如果对于这个{task_type}中有多个{semantic_type}时，这个task_type存在多个{context_id}对应到不同的{semantic_type}。
+当一个{agent_id}_{task_type}_{semantic_type}的LLM首轮调用时， 创建一个唯一标记 {context_id} (对于agent_id的唯一标记， 不同agent_id对应的task_id可以保持一样)， 并且在completion前插入原语"artesia.create({agent_id}, {context_id})" (确保其为{context_id}的第一条命令)。 如果对于这个{task_type}中有多个{semantic_type}时，这个task_type存在多个{context_id}对应到不同的{semantic_type}。
 
 同时每个agent请求维护一个状态记录当前这个agent请求处在哪个{context_id}当中， 如果即将运行的LLM的{context_id} 和这个agent请求当前处在的{context_id}不一致， 则调用"artesia.offload({current task id}, duration=None)"(当前context_id短期不用，可以offload), 并且调用"artesia.fetch({new_task_id})"。并设置当前这个agent请求的状态在{context_id}中。 如果相同则不用offload，仅仅调用fetch即可
 

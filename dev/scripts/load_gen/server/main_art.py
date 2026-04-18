@@ -63,7 +63,7 @@ class SimRequest(BaseModel):
     temperature: Optional[float] = 0.0
     task_type_list: Optional[List[str]] = None
     semantic_type_list: Optional[List[Optional[List[str]]]] = None
-    prefix_pos_list: Optional[List[int]] = None
+    # prefix_pos_list: Optional[List[int]] = None
 
 
 # ========== Helper Functions ==========
@@ -176,37 +176,41 @@ def build_artesia_context(req: SimRequest, agent_id: str) -> Optional[Dict[str, 
     presence = [
         req.task_type_list is not None,
         req.semantic_type_list is not None,
-        req.prefix_pos_list is not None,
+        # req.prefix_pos_list is not None,
     ]
     if not any(presence):
         return None
     if not all(presence):
         raise HTTPException(
             status_code=400,
-            detail="task_type_list, semantic_type_list, prefix_pos_list must all be provided together",
+            # detail="task_type_list, semantic_type_list, prefix_pos_list must all be provided together",
+            detail="task_type_list and semantic_type_list must both be provided together",
         )
 
     if len(req.task_type_list) != req.n:
         raise HTTPException(status_code=400, detail="task_type_list length must equal n")
     if len(req.semantic_type_list) != req.n:
         raise HTTPException(status_code=400, detail="semantic_type_list length must equal n")
-    if len(req.prefix_pos_list) != req.n:
-        raise HTTPException(status_code=400, detail="prefix_pos_list length must equal n")
+    # if len(req.prefix_pos_list) != req.n:
+    #     raise HTTPException(status_code=400, detail="prefix_pos_list length must equal n")
 
     normalized_semantic_list: List[Optional[str]] = [
         normalize_semantic_type(value) for value in req.semantic_type_list
     ]
     classification_list: List[str] = []
     context_id_list: List[str] = []
+    main_context_id_list: List[str] = []
     context_states: Dict[str, Dict[str, int]] = {}
 
     for round_idx, task_type_text in enumerate(req.task_type_list):
         normalized_semantic = normalized_semantic_list[round_idx]
         classification = classify_round(task_type_text, normalized_semantic)
         context_id = build_context_id(agent_id, task_type_text, normalized_semantic)
+        main_context_id = build_context_id(agent_id, task_type_text, None)
 
         classification_list.append(classification)
         context_id_list.append(context_id)
+        main_context_id_list.append(main_context_id)
 
         if context_id not in context_states:
             context_states[context_id] = {
@@ -220,8 +224,9 @@ def build_artesia_context(req: SimRequest, agent_id: str) -> Optional[Dict[str, 
         "normalized_semantic_list": normalized_semantic_list,
         "classification_list": classification_list,
         "context_id_list": context_id_list,
+        "main_context_id_list": main_context_id_list,
         "context_states": context_states,
-        "prefix_pos_list": req.prefix_pos_list,
+        # "prefix_pos_list": req.prefix_pos_list,
     }
 
 
@@ -261,29 +266,50 @@ def resolve_context_cache_id(
     return build_fallback_context_id(task_type)
 
 
-def validate_prefix_pos_context(
-    req: SimRequest,
+def resolve_derived_bootstrap_main_context_id(
     artesia_context: Optional[Dict[str, Any]],
     round_idx: int,
-    context_id: str,
-) -> None:
-    """记录 prefix_pos 指向不同 context 的情况，便于排查 replay 元数据问题。"""
-    if artesia_context is None or req.prefix_pos_list is None:
-        return
+) -> Optional[str]:
+    """首轮 derived context 允许借用同 task_type 对应的 main loop system prompt。"""
+    if artesia_context is None:
+        return None
 
-    prefix_round = artesia_context["prefix_pos_list"][round_idx]
-    if prefix_round < 0 or prefix_round >= req.n:
-        return
+    classification = artesia_context["classification_list"][round_idx]
+    if classification != "loop_derived":
+        return None
 
-    prefix_context_id = artesia_context["context_id_list"][prefix_round]
-    if prefix_context_id != context_id:
-        logger.warning(
-            "Round %s uses context %s but prefix_pos=%s points to context %s",
-            round_idx,
-            context_id,
-            prefix_round,
-            prefix_context_id,
-        )
+    context_id = artesia_context["context_id_list"][round_idx]
+    context_state = artesia_context["context_states"][context_id]
+    if round_idx != context_state["first_round"]:
+        return None
+
+    return artesia_context["main_context_id_list"][round_idx]
+
+
+#def validate_prefix_pos_context(
+#    req: SimRequest,
+#    artesia_context: Optional[Dict[str, Any]],
+#    round_idx: int,
+#    context_id: str,
+#) -> None:
+#    """prefix_pos 校验逻辑已停用，原始实现保留为注释。"""
+#    return
+    # if artesia_context is None or req.prefix_pos_list is None:
+    #     return
+    #
+    # prefix_round = artesia_context["prefix_pos_list"][round_idx]
+    # if prefix_round < 0 or prefix_round >= req.n:
+    #     return
+    #
+    # prefix_context_id = artesia_context["context_id_list"][prefix_round]
+    # if prefix_context_id != context_id:
+    #     logger.warning(
+    #         "Round %s uses context %s but prefix_pos=%s points to context %s",
+    #         round_idx,
+    #         context_id,
+    #         prefix_round,
+    #         prefix_context_id,
+    #     )
 
 
 def append_common_pre_commands(
@@ -501,18 +527,32 @@ def simulate_sync(req_dict: Dict) -> Dict:
         round_messages = []
         this_round_prompt_token_ids: List[List[int]] = []
         effective_b_row: List[int] = []
-        validate_prefix_pos_context(
-            req=req,
-            artesia_context=artesia_context,
-            round_idx=i,
-            context_id=context_cache_id,
-        )
+        # validate_prefix_pos_context(
+        #     req=req,
+        #     artesia_context=artesia_context,
+        #     round_idx=i,
+        #     context_id=context_cache_id,
+        # )
         source_round_idx = last_round_idx_by_context.get(context_cache_id)
         source_round_ids = (
             round_prompt_token_ids_by_round[source_round_idx]
             if source_round_idx is not None
             else None
         )
+        bootstrap_main_context_id = resolve_derived_bootstrap_main_context_id(
+            artesia_context=artesia_context,
+            round_idx=i,
+        )
+        bootstrap_main_first_ids: Optional[List[int]] = None
+        bootstrap_main_round = (
+            last_round_idx_by_context.get(bootstrap_main_context_id)
+            if bootstrap_main_context_id is not None
+            else None
+        )
+        if source_round_ids is None and bootstrap_main_round is not None:
+            bootstrap_round_ids = round_prompt_token_ids_by_round[bootstrap_main_round]
+            if bootstrap_round_ids is not None and len(bootstrap_round_ids) > 0:
+                bootstrap_main_first_ids = bootstrap_round_ids[0]
         # 构建 m 条 message（保持顺序）
         for j in range(m):
             a_ij = int(a_row[j])
@@ -529,6 +569,10 @@ def simulate_sync(req_dict: Dict) -> Dict:
                 else:
                     b_ij = 0
                     reused_ids = []
+            elif bootstrap_main_first_ids is not None and j == 0:
+                # 首轮 derived context 的 system prompt 直接继承自同 task_type 的 main loop。
+                b_ij = min(len(bootstrap_main_first_ids), a_ij)
+                reused_ids = bootstrap_main_first_ids[:b_ij]
             else:
                 b_ij = 0
                 reused_ids = []
@@ -628,7 +672,7 @@ def simulate_sync(req_dict: Dict) -> Dict:
         p50_decode_time = np.percentile(decode_time, 50)
         p95_decode_time = np.percentile(decode_time, 95)
 
-        calculate_cached_tokens = np.sum(b_row)
+        calculate_cached_tokens = np.sum(effective_b_row)
 
         write_result = [context_cache_id, completion.usage.prompt_tokens, completion.usage.completion_tokens, calculate_cached_tokens, cached_tokens, completion.prefill_time, sum_decode_time, avg_decode_time, p50_decode_time, p95_decode_time, completion.num_local_cache, completion.num_global_cache]
         csv_writer.writerow(write_result)
