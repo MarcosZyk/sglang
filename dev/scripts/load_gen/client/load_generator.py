@@ -39,6 +39,8 @@ class SimRequest(BaseModel):
     tokenizer_name: Optional[str] = None
     openai_model: Optional[str] = None
     temperature: Optional[float] = 0.0
+    task_type_list: Optional[List[str]] = None
+    semantic_type_list: Optional[List[Optional[List[str]]]] = None
 
 
 @dataclass
@@ -382,7 +384,7 @@ class LoadGenerator:
 def run_client(server_url: str = "http://localhost:12306",
                rps: float = 100.0, total_requests: int = 1000, model_name: str = None):
     """运行客户端负载测试"""
-    sim_config = read_replay_data('../../../../dataset/replay_data_4.json', model_name)
+    sim_config = read_replay_data('../output_aone_flattened/test1.json', model_name)
     generator = LoadGenerator(
         server_url=server_url,
         rps=rps,

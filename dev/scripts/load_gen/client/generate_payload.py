@@ -1,6 +1,6 @@
 import json
 import argparse
-from typing import Optional
+from typing import Any, Optional
 
 def read_replay_data(file_path: Optional[str] = None, model_name: str = None):
     """
@@ -28,6 +28,18 @@ def read_replay_data(file_path: Optional[str] = None, model_name: str = None):
                 ["system", "user", "assistant", "user", "assistant", "user"],
             ],
             "task_list": [0, 0, 1, 0],
+            "task_type_list": [
+                "iFlow CLI main",
+                "iFlow CLI main",
+                "regular task",
+                "iFlow CLI main",
+            ],
+            "semantic_type_list": [
+                None,
+                ["sub"],
+                None,
+                ["sub"],
+            ],
             "wait_time": [0, 0, 1, 0],
             "tokenizer_name": model_name,
             "openai_model": model_name,
@@ -41,32 +53,42 @@ def read_replay_data(file_path: Optional[str] = None, model_name: str = None):
     # 初始化结果字典
     result = {
         "n": len(data),  # JSON文件中的{}个数总和
-        "n_task": 10,#len(set(item["task_list"] for item in data)),  # task_list中的数值种类总数
+        "n_task": len({item["task_type_int"] for item in data}),
         "s_list": [],
         "m_list": [],
         "a_list": [],
         "b_list": [],
         "roles_list": [],
         "wait_time": [],
-        "tempurature": 0,
+        "temperature": 0.0,
         "openai_model": model_name,
         "tokenizer_name": model_name,
-        "task_list": []
+        "task_list": [],
+        "task_type_list": [],
+        "semantic_type_list": [],
     }
     
     # 遍历数据并填充数组
     for item in data:
-        result["s_list"].append(item["s_list"])
-        result["m_list"].append(item["m_list"])
-        result["a_list"].append(item["a_list"])
-        result["b_list"].append(item["b_list"])
-        result["roles_list"].append(item["role_list"])
+        result["s_list"].append(item["s"])
+        result["m_list"].append(item["m"])
+        result["a_list"].append(item["a"])
+        result["b_list"].append(item["b"])
+        result["roles_list"].append(item["role"])
         result["wait_time"].append(item["wait_time"])
-        result["task_list"].append(item["task_list"])
+        result["task_list"].append(item["task_type_int"])
+        result["task_type_list"].append(item["task_type"])
+        semantic_type: Any = item.get("semantic type")
+        if semantic_type is None:
+            result["semantic_type_list"].append(None)
+        elif isinstance(semantic_type, list):
+            result["semantic_type_list"].append(semantic_type)
+        else:
+            result["semantic_type_list"].append([semantic_type])
     
     return result
 
 if __name__ == "__main__":
     # 使用示例
-    result = read_replay_data('../dataset/replay_data_3.json')
+    result = read_replay_data('../output_aone_flattened/test1.json')
     print(result)
