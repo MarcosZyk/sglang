@@ -1,5 +1,4 @@
 # server.py - 优化版（保持轮次顺序，请求间并发）
-import os
 import random
 import asyncio
 import time
@@ -20,6 +19,21 @@ import uuid
 import csv
 import numpy as np
 import json
+
+try:
+    from server.contextcake_client import (
+        ContextCakeHttpClient,
+        build_contextcake_openai_base_url,
+        get_contextcake_base_url,
+        set_contextcake_base_url,
+    )
+except ImportError:
+    from contextcake_client import (
+        ContextCakeHttpClient,
+        build_contextcake_openai_base_url,
+        get_contextcake_base_url,
+        set_contextcake_base_url,
+    )
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -239,32 +253,84 @@ def resolve_context_cache_id(
         return artesia_context["context_id_list"][round_idx]
     return build_fallback_context_id(task_type)
 
-def append_common_pre_commands(
-    commands: List[str],
+
+def get_prompt_tokens_details(usage: Any) -> Any:
+    if usage is None:
+        return None
+    return getattr(usage, "prompt_tokens_details", None)
+
+
+def get_cached_tokens_from_completion(completion: Any) -> int:
+    usage = getattr(completion, "usage", None)
+    prompt_tokens_details = get_prompt_tokens_details(usage)
+    if prompt_tokens_details is None:
+        return 0
+    if isinstance(prompt_tokens_details, dict):
+        return int(prompt_tokens_details.get("cached_tokens", 0) or 0)
+    return int(getattr(prompt_tokens_details, "cached_tokens", 0) or 0)
+
+
+def get_decode_time_stats(completion: Any) -> tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
+    decode_time = getattr(completion, "decode_time", None)
+    if decode_time is None:
+        return None, None, None, None
+
+    decode_time_array = np.asarray(decode_time, dtype=float)
+    if decode_time_array.size == 0:
+        return 0.0, 0.0, 0.0, 0.0
+
+    return (
+        float(np.sum(decode_time_array)),
+        float(np.average(decode_time_array)),
+        float(np.percentile(decode_time_array, 50)),
+        float(np.percentile(decode_time_array, 95)),
+    )
+
+
+def get_context_runtime_state(
+    context_runtime: Dict[str, Dict[str, bool]],
+    context_id: str,
+) -> Dict[str, bool]:
+    return context_runtime.setdefault(
+        context_id,
+        {
+            "created": False,
+            "suspended": False,
+        },
+    )
+
+
+def execute_common_pre_commands(
+    contextcake_client: ContextCakeHttpClient,
     artesia_context: Optional[Dict[str, Any]],
+    context_runtime: Dict[str, Dict[str, bool]],
     round_idx: int,
-    agent_id: str,
     current_context_id: Optional[str],
 ) -> Optional[str]:
     if artesia_context is None:
         return current_context_id
 
     context_id = artesia_context["context_id_list"][round_idx]
-    context_state = artesia_context["context_states"][context_id]
 
     if current_context_id is not None and current_context_id != context_id:
-        commands.append(f"artesia.offload({current_context_id}, duration=None)")
+        current_context_state = get_context_runtime_state(context_runtime, current_context_id)
+        if not current_context_state["suspended"]:
+            contextcake_client.suspend(round_idx, "pre", current_context_id)
+            current_context_state["suspended"] = True
 
-    if round_idx == context_state["first_round"]:
-        commands.append(f"artesia.create({agent_id}, {context_id})")
+    context_state = get_context_runtime_state(context_runtime, context_id)
+    if not context_state["created"]:
+        contextcake_client.create_context(round_idx, context_id)
+        context_state["created"] = True
+    context_state["suspended"] = False
 
-    commands.append(f"artesia.fetch({context_id})")
     return context_id
 
 
-def append_common_post_commands(
-    commands: List[str],
+def execute_common_post_commands(
+    contextcake_client: ContextCakeHttpClient,
     artesia_context: Optional[Dict[str, Any]],
+    context_runtime: Dict[str, Dict[str, bool]],
     round_idx: int,
 ) -> None:
     if artesia_context is None:
@@ -273,14 +339,15 @@ def append_common_post_commands(
     context_id = artesia_context["context_id_list"][round_idx]
     context_state = artesia_context["context_states"][context_id]
     if round_idx == context_state["last_round"]:
-        commands.append(f"artesia.delete({context_id})")
+        contextcake_client.delete_context(round_idx, context_id)
+        context_runtime.pop(context_id, None)
 
 
-def append_artesia_commands_for_round(
-    commands: List[str],
+def execute_artesia_commands_for_round(
+    contextcake_client: ContextCakeHttpClient,
     artesia_context: Optional[Dict[str, Any]],
+    context_runtime: Dict[str, Dict[str, bool]],
     round_idx: int,
-    agent_id: str,
     current_context_id: Optional[str],
     m: int,
     a_row: List[int],
@@ -289,63 +356,59 @@ def append_artesia_commands_for_round(
     if artesia_context is None:
         return current_context_id
 
-    current_context_id = append_common_pre_commands(
-        commands=commands,
+    current_context_id = execute_common_pre_commands(
+        contextcake_client=contextcake_client,
         artesia_context=artesia_context,
+        context_runtime=context_runtime,
         round_idx=round_idx,
-        agent_id=agent_id,
         current_context_id=current_context_id,
     )
 
     context_id = artesia_context["context_id_list"][round_idx]
     classification = artesia_context["classification_list"][round_idx]
-    call_id = build_call_id(agent_id, round_idx)
 
     if classification == "non_loop":
-        commands.append(f"artesia.reject({call_id})")
+        contextcake_client.one_off(round_idx, context_id, 0)
         return current_context_id
 
     if classification == "loop_main":
         rebase_index = find_rebase_index(a_row, effective_b_row, m)
-        commands.append(f"artesia.truncate({context_id}, {rebase_index})")
+        contextcake_client.truncate(round_idx, "pre", context_id, rebase_index)
         return current_context_id
+
+    if classification == "loop_derived":
+        contextcake_client.one_off(round_idx, context_id, 1)
 
     return current_context_id
 
 
-def append_artesia_post_commands_for_round(
-    commands: List[str],
+def execute_artesia_post_commands_for_round(
+    contextcake_client: ContextCakeHttpClient,
     artesia_context: Optional[Dict[str, Any]],
-    req: SimRequest,
+    context_runtime: Dict[str, Dict[str, bool]],
     round_idx: int,
-    m: int,
-    a_row: List[int],
-    effective_b_row: List[int],
 ) -> Optional[str]:
     if artesia_context is None:
         return None
 
     context_id = artesia_context["context_id_list"][round_idx]
     classification = artesia_context["classification_list"][round_idx]
+    context_state = get_context_runtime_state(context_runtime, context_id)
 
     if classification == "loop_derived":
-        stash_list = list(range(1, m + 1))
-        #commands.append(f"artesia.tag({context_id}, 0)")
-        commands.append(f"artesia.truncate({context_id}, {stash_list})")
-    elif classification == "loop_main":
-        rebase_index = find_rebase_index(a_row, effective_b_row, m)
-        commit_list = list(range(rebase_index, m + 1))
-        #commands.append(f"artesia.tag({context_id}, {commit_list})")
-        wait_time = req.wait_time[round_idx] if req.wait_time is not None else None
-        commands.append(f"artesia.offload({context_id}, duration={wait_time})")
+        contextcake_client.truncate(round_idx, "post", context_id, 1)
+    elif classification == "loop_main" and not context_state["suspended"]:
+        contextcake_client.suspend(round_idx, "post", context_id)
+        context_state["suspended"] = True
 
-    append_common_post_commands(
-        commands=commands,
+    execute_common_post_commands(
+        contextcake_client=contextcake_client,
         artesia_context=artesia_context,
+        context_runtime=context_runtime,
         round_idx=round_idx,
     )
-    context_state = artesia_context["context_states"][context_id]
-    if round_idx == context_state["last_round"]:
+    round_context_state = artesia_context["context_states"][context_id]
+    if round_idx == round_context_state["last_round"]:
         return None
     return context_id
 
@@ -358,250 +421,275 @@ def simulate_sync(req_dict: Dict) -> Dict:
     不同请求可以并行执行，但每个请求内部保持顺序
     """
     rid = str(uuid.uuid4())
-
-    file = open(f'../result/{rid}.csv', 'a', newline='', encoding='utf-8')
-    csv_writer = csv.writer(file)
-    csv_writer.writerow(['context_id', 'num_prefill_tokens', 'num_decode_tokens', 'theoretical_cached_tokens', 'num_cached_tokens', 'prefill_time', 'sum_decode_time', 'tpot', 'p50_tpot', 'p95_tpot', 'num_local_cache_tokens', 'num_global_cached_tokens'])
-
     start_time = time.perf_counter()
+    contextcake_client: Optional[ContextCakeHttpClient] = None
 
-    # 从字典重建 SimRequest 对象
-    req = SimRequest(**req_dict)
+    with open(f"../result/{rid}.csv", "a", newline="", encoding="utf-8") as file:
+        csv_writer = csv.writer(file)
+        csv_writer.writerow([
+            "context_id",
+            "num_prefill_tokens",
+            "num_decode_tokens",
+            "theoretical_cached_tokens",
+            "num_cached_tokens",
+            "prefill_time",
+            "sum_decode_time",
+            "tpot",
+            "p50_tpot",
+            "p95_tpot",
+            "num_local_cache_tokens",
+            "num_global_cached_tokens",
+        ])
 
-    # ========== 原有验证逻辑（保持不变） ==========
-    if req.n <= 0:
-        raise HTTPException(status_code=400, detail="n must be > 0")
-    if req.n_task <= 0:
-        raise HTTPException(status_code=400, detail="n_task must be > 0")
+        # 从字典重建 SimRequest 对象
+        req = SimRequest(**req_dict)
 
-    tokenizer_name = req.tokenizer_name
-    openai_model = req.openai_model
+        # ========== 原有验证逻辑（保持不变） ==========
+        if req.n <= 0:
+            raise HTTPException(status_code=400, detail="n must be > 0")
+        if req.n_task <= 0:
+            raise HTTPException(status_code=400, detail="n_task must be > 0")
 
-    # load tokenizer
-    tokenizer = get_tokenizer(tokenizer_name)
-    forbidden_ids = set(getattr(tokenizer, "all_special_ids", []))
+        tokenizer_name = req.tokenizer_name
+        openai_model = req.openai_model
 
-    n = req.n
+        # load tokenizer
+        tokenizer = get_tokenizer(tokenizer_name)
+        forbidden_ids = set(getattr(tokenizer, "all_special_ids", []))
 
-    if req.m_list:
-        if len(req.m_list) != n:
-            raise HTTPException(status_code=400, detail="m_list length must equal n")
-        m_list = req.m_list
-    else:
-        raise HTTPException(status_code=400, detail="m_list length must equal n")
+        n = req.n
 
-    if req.s_list:
-        if len(req.s_list) != n:
-            raise HTTPException(status_code=400, detail="s_list length must equal n")
-        s_list = req.s_list
-    else:
-        raise HTTPException(status_code=400, detail="s_list length must equal n")
-
-    a_list = req.a_list
-    b_list = req.b_list
-    roles_list = req.roles_list
-
-    if a_list and len(a_list) != n:
-        raise HTTPException(status_code=400, detail="a_list length must equal n if provided")
-    if b_list and len(b_list) != n:
-        raise HTTPException(status_code=400, detail="b_list length must equal n if provided")
-
-    artesia_context = build_artesia_context(req, rid)
-    artesia_commands: List[str] = []
-    current_context_id: Optional[str] = None
-
-    # ========== 创建 OpenAI 客户端 ==========
-    client = OpenAI(
-        api_key="EMPTY",
-        base_url="http://localhost:12347/v1",
-        timeout=1800,  # 增加超时
-        max_retries=0,
-    )
-
-    # ========== 历史记录 ==========
-    history_rounds_by_context: Dict[str, List[List[Dict[str, str]]]] = {}
-    round_prompt_token_ids_by_round: List[Optional[List[List[int]]]] = [None for _ in range(n)]
-    last_round_idx_by_context: Dict[str, int] = {}
-
-    # ========== 主循环 - 保持顺序执行 ==========
-    for i in range(n):
-        m = m_list[i]
-        task_type = req.task_list[i]
-        context_cache_id = resolve_context_cache_id(
-            artesia_context=artesia_context,
-            round_idx=i,
-            task_type=task_type,
-        )
-
-        a_row = a_list[i]
-        b_row = b_list[i]
-        roles_row = roles_list[i]
-
-        if len(a_row) != m:
-            raise HTTPException(status_code=400, detail=f"a_list[{i}] length must be {m}")
-        if len(b_row) != m:
-            raise HTTPException(status_code=400, detail=f"b_list[{i}] length must be {m}")
-        if len(roles_row) != m:
-            raise HTTPException(status_code=400, detail=f"roles_list[{i}] length must be {m}")
-
-        round_messages = []
-        this_round_prompt_token_ids: List[List[int]] = []
-        effective_b_row: List[int] = []
-        source_round_idx = last_round_idx_by_context.get(context_cache_id)
-        source_round_ids = (
-            round_prompt_token_ids_by_round[source_round_idx]
-            if source_round_idx is not None
-            else None
-        )
-        classification = (
-            artesia_context["classification_list"][i]
-            if artesia_context is not None
-            else None
-        )
-        # 构建 m 条 message（保持顺序）
-        for j in range(m):
-            a_ij = int(a_row[j])
-            b_ij = int(b_row[j])
-            role_j = roles_row[j]
-
-            # 获取上一轮的 token ids（保持依赖关系）
-            reused_ids = []
-            if classification == "loop_derived":
-                if source_round_ids is not None and j == 0 and len(source_round_ids) > 0:
-                    prev_ids = source_round_ids[0]
-                    b_ij = min(b_ij, len(prev_ids), a_ij)
-                    reused_ids = prev_ids[:b_ij]
-                else:
-                    b_ij = 0
-                    reused_ids = []
-            else:
-                if source_round_ids is not None:
-                    if j < len(source_round_ids):
-                        prev_ids = source_round_ids[j]
-                        b_ij = min(b_ij, len(prev_ids), a_ij)
-                        reused_ids = prev_ids[:b_ij]
-                    else:
-                        b_ij = 0
-                        reused_ids = []
-                else:
-                    b_ij = 0
-                    reused_ids = []
-
-            # 生成新 token ids
-            new_count = a_ij - b_ij
-            new_ids = random_id_sampler(tokenizer, new_count, forbidden_ids) if new_count > 0 else []
-            token_ids = reused_ids + new_ids
-
-            # decode -> prompt text
-            prompt_text = tokenizer.decode(
-                token_ids,
-                skip_special_tokens=False,
-                #clean_up_tokenization_spaces=True
-            )
-
-            effective_b_row.append(b_ij)
-            this_round_prompt_token_ids.append(token_ids)
-            round_messages.append({role_j: prompt_text})
-
-        # flatten current round messages -> messages
-        call_messages = []
-        for item in round_messages:
-            for key in item:
-                role = key
-                content = item[key]
-                call_messages.append({"role": role, "content": content})
-
-        current_context_id = append_artesia_commands_for_round(
-            commands=artesia_commands,
-            artesia_context=artesia_context,
-            round_idx=i,
-            agent_id=rid,
-            current_context_id=current_context_id,
-            m=m,
-            a_row=a_row,
-            effective_b_row=effective_b_row,
-        )
-
-        # ========== LLM 调用（同步，但在线程池中执行） ==========
-        try:
-            completion = client.chat.completions.create(
-                model=openai_model,
-                messages=call_messages,
-                max_tokens=s_list[i],
-                logprobs=True,
-                temperature=req.temperature,
-                top_logprobs=1,
-                extra_body={
-                    "ignore_eos": True  # 将参数放在这里
-                },
-                agent_id=rid,
-                task_id=context_cache_id if artesia_context is not None else task_type,
-            )
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"OpenAI API call failed: {e}")
-
-        if completion.choices[0].logprobs and completion.choices[0].logprobs.content:
-            assistant_text = ""
-            for token_info in completion.choices[0].logprobs.content:
-                assistant_text = assistant_text + token_info.token
-
+        if req.m_list:
+            if len(req.m_list) != n:
+                raise HTTPException(status_code=400, detail="m_list length must equal n")
+            m_list = req.m_list
         else:
-            assistant_text = completion.choices[0].message.content
+            raise HTTPException(status_code=400, detail="m_list length must equal n")
 
-        assistant_token_ids = tokenizer.encode(assistant_text, add_special_tokens=False)
+        if req.s_list:
+            if len(req.s_list) != n:
+                raise HTTPException(status_code=400, detail="s_list length must equal n")
+            s_list = req.s_list
+        else:
+            raise HTTPException(status_code=400, detail="s_list length must equal n")
 
-        # 存储历史记录
-        round_messages.append({"assistant": assistant_text})
-        history_rounds_by_context.setdefault(context_cache_id, []).append(round_messages)
+        a_list = req.a_list
+        b_list = req.b_list
+        roles_list = req.roles_list
 
-        this_round_prompt_token_ids.append(assistant_token_ids)
-        round_prompt_token_ids_by_round[i] = this_round_prompt_token_ids
-        last_round_idx_by_context[context_cache_id] = i
+        if a_list and len(a_list) != n:
+            raise HTTPException(status_code=400, detail="a_list length must equal n if provided")
+        if b_list and len(b_list) != n:
+            raise HTTPException(status_code=400, detail="b_list length must equal n if provided")
 
-        post_context_id = append_artesia_post_commands_for_round(
-            commands=artesia_commands,
-            artesia_context=artesia_context,
-            req=req,
-            round_idx=i,
-            m=m,
-            a_row=a_row,
-            effective_b_row=effective_b_row,
-        )
-        if artesia_context is not None:
-            current_context_id = post_context_id
+        artesia_context = build_artesia_context(req, rid)
+        context_runtime: Dict[str, Dict[str, bool]] = {}
+        current_context_id: Optional[str] = None
+        contextcake_base_url = get_contextcake_base_url()
 
-        cached_tokens = (
-            completion.usage.prompt_tokens_details.cached_tokens
-            if completion.usage.prompt_tokens_details
-            else 0
+        contextcake_client = ContextCakeHttpClient(
+            base_url=contextcake_base_url,
         )
 
-        decode_time = completion.decode_time
-        sum_decode_time = np.sum(decode_time)
-        avg_decode_time = np.average(decode_time)
-        p50_decode_time = np.percentile(decode_time, 50)
-        p95_decode_time = np.percentile(decode_time, 95)
+        # ========== 创建 OpenAI 客户端 ==========
+        client = OpenAI(
+            api_key="EMPTY",
+            base_url=build_contextcake_openai_base_url(contextcake_base_url),
+            timeout=1800,
+            max_retries=0,
+        )
 
-        calculate_cached_tokens = np.sum(effective_b_row)
+        # ========== 历史记录 ==========
+        history_rounds_by_context: Dict[str, List[List[Dict[str, str]]]] = {}
+        round_prompt_token_ids_by_round: List[Optional[List[List[int]]]] = [None for _ in range(n)]
+        last_round_idx_by_context: Dict[str, int] = {}
 
-        write_result = [context_cache_id, completion.usage.prompt_tokens, completion.usage.completion_tokens, calculate_cached_tokens, cached_tokens, completion.prefill_time, sum_decode_time, avg_decode_time, p50_decode_time, p95_decode_time, completion.num_local_cache, completion.num_global_cache]
-        csv_writer.writerow(write_result)
+        try:
+            # ========== 主循环 - 保持顺序执行 ==========
+            for i in range(n):
+                m = m_list[i]
+                task_type = req.task_list[i]
+                context_cache_id = resolve_context_cache_id(
+                    artesia_context=artesia_context,
+                    round_idx=i,
+                    task_type=task_type,
+                )
 
-        # 等待指定时间（模拟 tool 调用延迟）
-        if req.wait_time and req.wait_time[i] > 0:
-            time.sleep(req.wait_time[i])
+                a_row = a_list[i]
+                b_row = b_list[i]
+                roles_row = roles_list[i]
+
+                if len(a_row) != m:
+                    raise HTTPException(status_code=400, detail=f"a_list[{i}] length must be {m}")
+                if len(b_row) != m:
+                    raise HTTPException(status_code=400, detail=f"b_list[{i}] length must be {m}")
+                if len(roles_row) != m:
+                    raise HTTPException(status_code=400, detail=f"roles_list[{i}] length must be {m}")
+
+                round_messages = []
+                this_round_prompt_token_ids: List[List[int]] = []
+                effective_b_row: List[int] = []
+                source_round_idx = last_round_idx_by_context.get(context_cache_id)
+                source_round_ids = (
+                    round_prompt_token_ids_by_round[source_round_idx]
+                    if source_round_idx is not None
+                    else None
+                )
+                classification = (
+                    artesia_context["classification_list"][i]
+                    if artesia_context is not None
+                    else None
+                )
+
+                for j in range(m):
+                    a_ij = int(a_row[j])
+                    b_ij = int(b_row[j])
+                    role_j = roles_row[j]
+
+                    reused_ids = []
+                    if classification == "loop_derived":
+                        if source_round_ids is not None and j == 0 and len(source_round_ids) > 0:
+                            prev_ids = source_round_ids[0]
+                            b_ij = min(b_ij, len(prev_ids), a_ij)
+                            reused_ids = prev_ids[:b_ij]
+                        else:
+                            b_ij = 0
+                            reused_ids = []
+                    else:
+                        if source_round_ids is not None:
+                            if j < len(source_round_ids):
+                                prev_ids = source_round_ids[j]
+                                b_ij = min(b_ij, len(prev_ids), a_ij)
+                                reused_ids = prev_ids[:b_ij]
+                            else:
+                                b_ij = 0
+                                reused_ids = []
+                        else:
+                            b_ij = 0
+                            reused_ids = []
+
+                    new_count = a_ij - b_ij
+                    new_ids = (
+                        random_id_sampler(tokenizer, new_count, forbidden_ids)
+                        if new_count > 0
+                        else []
+                    )
+                    token_ids = reused_ids + new_ids
+
+                    prompt_text = tokenizer.decode(
+                        token_ids,
+                        skip_special_tokens=False,
+                    )
+
+                    effective_b_row.append(b_ij)
+                    this_round_prompt_token_ids.append(token_ids)
+                    round_messages.append({role_j: prompt_text})
+
+                call_messages = []
+                for item in round_messages:
+                    for key in item:
+                        role = key
+                        content = item[key]
+                        call_messages.append({"role": role, "content": content})
+
+                current_context_id = execute_artesia_commands_for_round(
+                    contextcake_client=contextcake_client,
+                    artesia_context=artesia_context,
+                    context_runtime=context_runtime,
+                    round_idx=i,
+                    current_context_id=current_context_id,
+                    m=m,
+                    a_row=a_row,
+                    effective_b_row=effective_b_row,
+                )
+
+                extra_body: Dict[str, Any] = {"ignore_eos": True}
+                context_id_for_chat = context_cache_id if artesia_context is not None else None
+
+                try:
+                    completion_kwargs: Dict[str, Any] = {
+                        "model": openai_model,
+                        "messages": call_messages,
+                        "max_tokens": s_list[i],
+                        "logprobs": True,
+                        "temperature": req.temperature,
+                        "top_logprobs": 1,
+                        "extra_body": extra_body,
+                    }
+                    if context_id_for_chat is not None:
+                        completion_kwargs["context_id"] = context_id_for_chat
+
+                    completion = client.chat.completions.create(**completion_kwargs)
+                except Exception as e:
+                    raise HTTPException(status_code=500, detail=f"OpenAI API call failed: {e}") from e
+
+                if completion.choices[0].logprobs and completion.choices[0].logprobs.content:
+                    assistant_text = ""
+                    for token_info in completion.choices[0].logprobs.content:
+                        assistant_text += token_info.token
+                else:
+                    assistant_text = completion.choices[0].message.content or ""
+
+                assistant_token_ids = tokenizer.encode(assistant_text, add_special_tokens=False)
+
+                round_messages.append({"assistant": assistant_text})
+                history_rounds_by_context.setdefault(context_cache_id, []).append(round_messages)
+
+                this_round_prompt_token_ids.append(assistant_token_ids)
+                round_prompt_token_ids_by_round[i] = this_round_prompt_token_ids
+                last_round_idx_by_context[context_cache_id] = i
+
+                post_context_id = execute_artesia_post_commands_for_round(
+                    contextcake_client=contextcake_client,
+                    artesia_context=artesia_context,
+                    context_runtime=context_runtime,
+                    round_idx=i,
+                )
+                if artesia_context is not None:
+                    current_context_id = post_context_id
+
+                usage = getattr(completion, "usage", None)
+                prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+                completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+                cached_tokens = get_cached_tokens_from_completion(completion)
+                sum_decode_time, avg_decode_time, p50_decode_time, p95_decode_time = (
+                    get_decode_time_stats(completion)
+                )
+                prefill_time = getattr(completion, "prefill_time", None)
+                num_local_cache = getattr(completion, "num_local_cache", None)
+                num_global_cache = getattr(completion, "num_global_cache", None)
+                calculate_cached_tokens = int(np.sum(effective_b_row))
+
+                write_result = [
+                    context_cache_id,
+                    prompt_tokens,
+                    completion_tokens,
+                    calculate_cached_tokens,
+                    cached_tokens,
+                    prefill_time,
+                    sum_decode_time,
+                    avg_decode_time,
+                    p50_decode_time,
+                    p95_decode_time,
+                    num_local_cache,
+                    num_global_cache,
+                ]
+                csv_writer.writerow(write_result)
+
+                if req.wait_time and req.wait_time[i] > 0:
+                    time.sleep(req.wait_time[i])
+        finally:
+            if contextcake_client is not None:
+                contextcake_client.close()
 
     end_time = time.perf_counter()
     processing_time = end_time - start_time
 
     logger.info(f"Request completed in {processing_time:.3f}s")
 
-    file.close()
-
     return {
         "history_rounds_by_context": history_rounds_by_context,
         "processing_time_s": processing_time,
-        "artesia_commands": artesia_commands,
     }
 
 
@@ -664,8 +752,19 @@ async def root():
     })
 
 
-def run_server(host: str = "0.0.0.0", port: int = 12306, workers: int = 1):
+def run_server(
+    host: str = "0.0.0.0",
+    port: int = 12306,
+    workers: int = 1,
+    max_concurrent: Optional[int] = None,
+    work_delay: Optional[float] = None,
+    contextcake_base_url: Optional[str] = None,
+):
     """启动服务器"""
+    del max_concurrent, work_delay
+    if contextcake_base_url is not None:
+        set_contextcake_base_url(contextcake_base_url)
+
     uvicorn.run(
         "main_art:app",
         host=host,
@@ -686,6 +785,16 @@ if __name__ == "__main__":
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=12306)
     parser.add_argument("--workers", type=int, default=1, help="Number of uvicorn workers")
+    parser.add_argument(
+        "--contextcake-base-url",
+        default=get_contextcake_base_url(),
+        help="Base URL of the ContextCake server",
+    )
     args = parser.parse_args()
 
-    run_server(host=args.host, port=args.port, workers=args.workers)
+    run_server(
+        host=args.host,
+        port=args.port,
+        workers=args.workers,
+        contextcake_base_url=args.contextcake_base_url,
+    )
