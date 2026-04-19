@@ -11,7 +11,7 @@ import sys
 def start_server(host: str = "0.0.0.0", port: int = 12306,
                  max_concurrent: int = 32, work_delay: float = 0.01):
     """启动服务端"""
-    from server.main import run_server
+    from server.main_art import run_server
     run_server(host=host, port=port, max_concurrent=max_concurrent, work_delay=work_delay)
 
 
