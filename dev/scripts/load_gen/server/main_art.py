@@ -5,6 +5,7 @@ import time
 import logging
 import hashlib
 import re
+from pathlib import Path
 from typing import List, Optional, Any, Dict
 from concurrent.futures import ThreadPoolExecutor
 
@@ -40,6 +41,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="LLM Agent Simulator")
+
+RESULT_DIR = Path(__file__).resolve().parent.parent / "result"
 
 SPECIAL_TASK_KEYWORDS = ["iFlow CLI"]
 
@@ -423,8 +426,9 @@ def simulate_sync(req_dict: Dict) -> Dict:
     rid = str(uuid.uuid4())
     start_time = time.perf_counter()
     contextcake_client: Optional[ContextCakeHttpClient] = None
+    RESULT_DIR.mkdir(parents=True, exist_ok=True)
 
-    with open(f"../result/{rid}.csv", "a", newline="", encoding="utf-8") as file:
+    with open(RESULT_DIR / f"{rid}.csv", "a", newline="", encoding="utf-8") as file:
         csv_writer = csv.writer(file)
         csv_writer.writerow([
             "context_id",
