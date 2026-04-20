@@ -1155,7 +1155,8 @@ class Scheduler(
                 bootstrap_room=recv_req.bootstrap_room,
                 data_parallel_rank=recv_req.data_parallel_rank,
                 agent_id=recv_req.agent_id,
-                task_id=recv_req.task_id
+                task_id=recv_req.task_id,
+                call_id=recv_req.call_id,
             )
             #logger.info(f'Req info: agent_id {req.agent_id}, task_id {req.task_id}')
             req.tokenizer = self.tokenizer

@@ -435,7 +435,8 @@ class Req:
         bootstrap_room: Optional[int] = None,
         data_parallel_rank: Optional[int] = None,
         agent_id: Optional[str] = None,
-        task_id: Optional[int] = None
+        task_id: Optional[int] = None,
+        call_id: Optional[str] = None,
     ):
         # Input and output info
         self.rid = rid
@@ -627,6 +628,7 @@ class Req:
 
         self.agent_id = agent_id
         self.task_id = task_id
+        self.call_id = call_id
 
     @property
     def seqlen(self):

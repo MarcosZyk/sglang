@@ -98,7 +98,8 @@ class OpenAIServingChat(OpenAIServingBase):
             return_hidden_states=request.return_hidden_states,
             rid=request.rid,
             agent_id=request.agent_id,
-            task_id=request.task_id
+            task_id=request.task_id,
+            call_id=request.call_id,
         )
 
         return adapted_request, request

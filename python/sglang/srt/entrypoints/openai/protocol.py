@@ -469,6 +469,7 @@ class ChatCompletionRequest(BaseModel):
 
     agent_id: Optional[str] = None
     task_id: Optional[int] = None
+    call_id: Optional[str] = None
 
 
 class ChatMessage(BaseModel):

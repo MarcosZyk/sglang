@@ -273,6 +273,7 @@ class ArtesiaRadixCache(RadixCache):
             context=context,
             semantics=semantics,
             kv_indices=kv_indices,
+            call_id=getattr(req, "call_id", None),
         )
         torch.cuda.synchronize()
         end_store = time.perf_counter()
