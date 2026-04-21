@@ -607,6 +607,8 @@ def simulate_sync(req_dict: Dict) -> Dict:
                     effective_b_row=effective_b_row,
                 )
 
+                logger.info(f'rid {rid}, round{i} finish pre-exe commands, ready to call openai client')
+
                 extra_body: Dict[str, Any] = {"ignore_eos": True}
                 context_id_for_chat = context_cache_id if artesia_context is not None else None
 
