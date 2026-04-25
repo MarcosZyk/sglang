@@ -1,0 +1,57 @@
+请你阅读sglang/dev/scripts/load_gen/server/main_art.py。 为我写一个artesia的仿真服务端，其模拟Agent请求执行LLM以及读取Prefix Cache的过程。 (不要求真实执行， 但我需要仿真他的时间)
+
+artesia需要提供以下功能：
+create_context: 为一个agent请求的subagent启动一个新的radix tree，这个为一个agent请求的subagent首次执行时触发。 create_context 接受的参数为context_id， 并且所有的新添加的message的context_type设置为durable。
+delete_context: 为一个agent请求的subagent删除radix tree， 其所有的context全部删除， GPU或者CPU上的缓存空间完全释放。 delete_context 接受的参数为 context_id。
+truncate: 将一个agent请求的subagent的radix tree的message从msg_index处开始截断， 保留[0, msg_index]的message list(不包括msg_index)， 剩下部分message对应的context删除， GPU或者CPU上的缓存空间完全释放。 truncate 接受的参数为 context_id 和 msg_index。
+one_off: 在下一次agent请求的subagent完成生成时，仅存储部分message list， 存储[0, msg_index]的message list(不包括msg_index)t， 剩下部分的message对应的context不存储在artesia的mem pool中， 如果存储则对应的 context 删除。 one_off 接受的参数为context_id 和 msg_index。
+suspend: 将一个agent请求的subagent的所有message (对应到context_id)的状态设置为 "suspend", suspend接受的参数为 context_id。
+
+generate: 模拟LLM的执行过程， generate的API接口在main_art当中通过openai通信库进行调用， 其模拟LLM执行过程， 其中对于CPU-GPU通信， GPU-SGLang通信， Prefill， Decode均通过sleep完成， 从而实现仿真。 CPU-GPU的通信带宽(GB/s)， GPU-SGLang带宽(GB/s)， Prefill/Decode吞吐(token/s)通过超参数指定。 generate过程每次处理1个请求，其他的请求存储在等待队列当中。 其中一个token对应的KV Cache大小也由超参数固定(默认为144KB)。 
+
+在artesia当中， 所有的message均包含两个状态 "durable" 以及 "suspend"。 "durable" 表示当前message正在被LLM推理，而"suspend"表示当前agent的这个subagent已经完成LLM推理，正在干其他的事情(例如调用tool call或者调用其他subagent)， 此时这些message处于闲置状态。
+
+在每次调用generate的过程中， LLM的推理过程如下：
+1. tokenizer: 将传入的message list中的所有message tokenize成为token ids。并逐一比对该请求在该context_id上的artesia存储的message。 对于token数量完全相等的前缀message， 其判定为match prefix， 需要从Artesia工作空间当中读取prefix。 对于首个与Artesia中数量不匹配以及后续的message， 则判定为未命中prefix， 需要进行prefill计算。(tokenize模型通过超参数提供， 并通过在huggingface上下载获得)。
+
+2. 对于match prefix的message， 需要将message对应的token从Artesia的存储空间传输到SGlang空间。传输规则如下: 对于Artesia中存储在CPU上的部分， 需要将其传输到GPU上。 如果传输完毕后， GPU存储空间的总容量超过预定的最大值(同样由超参数决定)， 则需要offload部分message的KV Cache到CPU内存端 (offload的调度策略之后会描述)。 那么这里的传输时间则为 将CPU 内存端的token的KV Cache传输到GPU 内存，加上对应offload 的KV Cache从GPU 传回 CPU的传输时间 (如果有)。 在此之后， 该请求的subagent的所有prefix cache从GPU显存传输到SGLang工作空间。(通过GPU-SGLang带宽)。 传输完毕后， 将该请求的这个subagent的所有message的状态设置为durable。
+
+3. 对于未命中prefix message， LLM首先通过prefill计算进行处理， 处理时间prefill time为message中未命中prefix cache的token数量除以Prefill处理吞吐。在Prefill完成之后， LLM进行Decode计算， 处理时间Decode Time为需要生成的token数量除以decode吞吐， 需生成的decode数量记录在openai库的max_tokens当中。 上述Prefill/Decode不要真的计算， 仅需要Sleep等待对应的时间就可以了。
+
+4. LLM生成完毕后， 需要把新添的message 写入Artesia存储空间， 优先写入GPU显存当中， 写入时间为新增的message的token数量除以GPU-SGLang带宽。 如果此时GPU显存空间不足， 则offload部分radix tree的message到CPU当中， 直到GPU空间不再不足 (offload的调度策略在之后介绍)。 offload的时间消耗为需要offload的token数量除以CPU-GPU通信带宽。 （请注意one-off部分的message不写入Artesia的存储空间）。 新存储的message 的状态设置为durable。
+
+因此整个LLM的时间包括读取Prefix的时间(记录在Prefill时间当中)， Prefill时间， Decode时间， 写入Artesia的时间(记录在Prefill时间当中)。
+
+对于generate的过程， 需要按照openai的格式返回， 并且返回以下信息：
+completion.choices[0].message.content 返回的message内容， 不需要真的生成message， 可以随机生成"max_tokens"个token，组装成为一个List (代表token_ids)， 再通过tokenizer.decode()将其解码成为text即可。
+completion.prefill_time记录Prefill的总时间(包含通信时间)。 
+completion.decode_time记录decode时间。
+completion.num_local_cache. LLM调用时， Prefix在GPU内存上的缓存的token数量。
+completion.num_global_cache. Prefix在GPU/CPU所有空间上的总缓存数量。(这两个为进当前agent在当前context_id的数量，不要把其他agent请求或其他context_id的技术囊括进来了).
+completion.usage.completion_tokens记录decode token的数量。
+completion.usage.prompt_tokens记录prefill token的数量。
+
+对于从Artesia读取Prefix或者写入Artesia时， 可能会存在GPU存储容量不足的情况 (GPU存储容量通过超参决定)， 此时需要将部分Message对应的token offload到CPU。 offload的调度策略如下:
+优先offload处在suspend状态的message， 如果GPU中没有suspend状态的message，再offload处在durable状态的message。
+对于每一种状态的message 驱逐的状态分为两种 LRU/MRU(设置为超参数)。 对于LRU， 则优先驱逐约早进入suspend/durable状态的message。 对于MRU， 则优先驱逐最近进入suspend/durable状态的message。
+
+artesia的存储，删除过程同样也是模拟， 而不需要事实存储， 每个message仅需要记录在artesia空间当中有多少个token即可, 不用真的每个token的存储和记录。 
+
+将上述仿真程序实现在一个文件夹当中， 文件夹和文件名你自己取，需要方便好理解， 文件夹存储在sglang/dev/scripts/load_gen/下面。
+请帮我分析上述需求， 如果确定没问题，完成上述需求。
+
+
+上述功能将其设置一个 --enable-artesia 开关。
+
+现在帮我在此基础之上实现一个不应用aratesia的功能。
+如果不应用artesia的话artesia需要维护的所有接口维持不变。 对于某些接口需要进行修改。
+create_context: 保持不变
+delete_context: 不进行任何实质操作，没有删除内容
+truncate: 仍然会进行截断保留[0:msg_index]，但是不会删除任何内容， 而是将truncate的部分开辟一个新的context额外存储， 新的context从[msg_index:]的所有msg_index， 并且这些msg的状态时间保持不变(不做更新)。但是这个新的context永远不会再重新访问和更新时间。
+one_off: 在下一次agent请求的subagent完成生成时，仅保留部分message list([0:msg_index])， 而剩下的部分也不会被删除[msg_index:]，而是同样开辟一个新的context存储起来 (一开始存储在GPU当中，msg的状态时间和非one_off的部分保持一致)， 同样新的这些context永远不会再访问和更新时间。
+suspend: 无任何操作， 没有设置suspend的时间状态。
+
+LLM的执行， 通信以及最后结果返回的内容保持不变， 注意每次prefill前， 对应的context的message的时间状态都会更新。
+
+对于从Artesia读取Prefix或者写入Artesia时， 可能会存在GPU存储容量不足的情况 (GPU存储容量通过超参决定)， 此时需要将部分Message对应的token offload到CPU。 offload的调度策略如下: 
+抽取所有存储再GPU上的context， 包括永远不再使用的那些， 并根据时间状态进行排序。 优先驱逐最远未更新时间状态的context，并且逐步从尾部进行offload， 直到这个message全部offload完毕。

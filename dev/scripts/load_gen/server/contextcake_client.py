@@ -13,7 +13,7 @@ def normalize_contextcake_base_url(base_url: str) -> str:
 
 
 CONTEXTCAKE_BASE_URL = normalize_contextcake_base_url(
-    os.getenv("CONTEXTCAKE_BASE_URL", "http://localhost:50350")
+    os.getenv("CONTEXTCAKE_BASE_URL", "http://localhost:50353")
 )
 
 

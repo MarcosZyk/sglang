@@ -178,7 +178,7 @@ class LoadGenerator:
     
     def __init__(self, server_url: str = "http://localhost:12306",
                  rps: float = 100.0, total_requests: int = 1000,
-                 timeout: float = 1800.0, warmup_requests: int = 0,
+                 timeout: float = 18000.0, warmup_requests: int = 0,
                  sim_config: Optional[SimRequest] = None):
         self.server_url = server_url
         self.rps = rps
@@ -384,7 +384,7 @@ class LoadGenerator:
 def run_client(server_url: str = "http://localhost:12306",
                rps: float = 100.0, total_requests: int = 1000, model_name: str = None):
     """运行客户端负载测试"""
-    sim_config = read_replay_data('../output_aone_flattened/test1.json', model_name)
+    sim_config = read_replay_data('../output_json_flatten/test8.json', model_name)
     generator = LoadGenerator(
         server_url=server_url,
         rps=rps,
@@ -399,7 +399,7 @@ def run_client(server_url: str = "http://localhost:12306",
 if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="Load Generator Client with SimRequest")
-    parser.add_argument("--url", default="http://localhost:12306", help="Server URL")
+    parser.add_argument("--url", default="http://localhost:12309", help="Server URL")
     parser.add_argument("--rps", type=float, default=100.0, help="Requests per second")
     parser.add_argument("--requests", type=int, default=1000, help="Total requests")
     parser.add_argument("--sim-n", type=int, default=10, help="SimRequest n value")

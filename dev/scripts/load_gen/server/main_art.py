@@ -5,9 +5,11 @@ import time
 import logging
 import hashlib
 import re
+import os
 from pathlib import Path
 from typing import List, Optional, Any, Dict
 from concurrent.futures import ThreadPoolExecutor
+import threading
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import ORJSONResponse
@@ -16,7 +18,6 @@ from openai import OpenAI  # 保持同步客户端
 from transformers import AutoTokenizer
 import uvicorn
 import argparse
-import uuid
 import csv
 import numpy as np
 import json
@@ -42,7 +43,18 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="LLM Agent Simulator")
 
-RESULT_DIR = Path(__file__).resolve().parent.parent / "result"
+
+def _default_result_dir() -> Path:
+    return Path(__file__).resolve().parent.parent / "result"
+
+
+def _resolve_result_dir(path_value: Optional[str]) -> Path:
+    if path_value is None or not path_value.strip():
+        return _default_result_dir()
+    return Path(path_value).expanduser().resolve()
+
+
+RESULT_DIR = _resolve_result_dir(os.getenv("LOAD_GEN_RESULT_DIR"))
 
 SPECIAL_TASK_KEYWORDS = ["iFlow CLI"]
 
@@ -62,6 +74,8 @@ tokenizer_executor = ThreadPoolExecutor(
 # 全局 tokenizer 缓存（避免重复加载）
 _tokenizer_cache: Dict[str, AutoTokenizer] = {}
 _tokenizer_lock = asyncio.Lock()
+_agent_id_lock = threading.Lock()
+_next_agent_id: Optional[int] = None
 
 
 # ========== Pydantic 请求模型 ==========
@@ -94,6 +108,39 @@ def get_tokenizer(tokenizer_name: str) -> AutoTokenizer:
             use_fast=True
         )
     return _tokenizer_cache[tokenizer_name]
+
+
+def _init_next_agent_id_locked() -> None:
+    global _next_agent_id
+    if _next_agent_id is not None:
+        return
+
+    RESULT_DIR.mkdir(parents=True, exist_ok=True)
+    max_existing_id = 0
+    for csv_path in RESULT_DIR.glob("*.csv"):
+        stem = csv_path.stem
+        if stem.isdigit():
+            max_existing_id = max(max_existing_id, int(stem))
+    _next_agent_id = max_existing_id + 1
+
+
+def allocate_agent_id() -> str:
+    global _next_agent_id
+    with _agent_id_lock:
+        _init_next_agent_id_locked()
+        assert _next_agent_id is not None
+        agent_id = _next_agent_id
+        _next_agent_id += 1
+    return str(agent_id)
+
+
+def set_result_dir(path_value: str) -> Path:
+    normalized = _resolve_result_dir(path_value)
+    os.environ["LOAD_GEN_RESULT_DIR"] = str(normalized)
+    global RESULT_DIR, _next_agent_id
+    RESULT_DIR = normalized
+    _next_agent_id = None
+    return normalized
 
 
 def random_id_sampler(tokenizer, k: int, forbidden: set):
@@ -278,16 +325,20 @@ def get_decode_time_stats(completion: Any) -> tuple[Optional[float], Optional[fl
     if decode_time is None:
         return None, None, None, None
 
+    if(isinstance(decode_time, float) == True):
+        return decode_time
+
     decode_time_array = np.asarray(decode_time, dtype=float)
     if decode_time_array.size == 0:
         return 0.0, 0.0, 0.0, 0.0
 
-    return (
-        float(np.sum(decode_time_array)),
-        float(np.average(decode_time_array)),
-        float(np.percentile(decode_time_array, 50)),
-        float(np.percentile(decode_time_array, 95)),
-    )
+    return float(np.sum(decode_time_array))
+    #return (
+    #    float(np.sum(decode_time_array)),
+    #    float(np.average(decode_time_array)),
+    #    float(np.percentile(decode_time_array, 50)),
+    #    float(np.percentile(decode_time_array, 95)),
+    #)
 
 
 def get_context_runtime_state(
@@ -423,12 +474,12 @@ def simulate_sync(req_dict: Dict) -> Dict:
     关键：这个函数会在线程池中执行，所以不会阻塞事件循环
     不同请求可以并行执行，但每个请求内部保持顺序
     """
-    rid = str(uuid.uuid4())
+    agent_id = allocate_agent_id()
     start_time = time.perf_counter()
     contextcake_client: Optional[ContextCakeHttpClient] = None
     RESULT_DIR.mkdir(parents=True, exist_ok=True)
 
-    with open(RESULT_DIR / f"{rid}.csv", "a", newline="", encoding="utf-8") as file:
+    with open(RESULT_DIR / f"{agent_id}.csv", "a", newline="", encoding="utf-8") as file:
         csv_writer = csv.writer(file)
         csv_writer.writerow([
             "context_id",
@@ -438,9 +489,6 @@ def simulate_sync(req_dict: Dict) -> Dict:
             "num_cached_tokens",
             "prefill_time",
             "sum_decode_time",
-            "tpot",
-            "p50_tpot",
-            "p95_tpot",
             "num_local_cache_tokens",
             "num_global_cached_tokens",
         ])
@@ -486,7 +534,7 @@ def simulate_sync(req_dict: Dict) -> Dict:
         if b_list and len(b_list) != n:
             raise HTTPException(status_code=400, detail="b_list length must equal n if provided")
 
-        artesia_context = build_artesia_context(req, rid)
+        artesia_context = build_artesia_context(req, agent_id)
         context_runtime: Dict[str, Dict[str, bool]] = {}
         current_context_id: Optional[str] = None
         contextcake_base_url = get_contextcake_base_url()
@@ -607,8 +655,6 @@ def simulate_sync(req_dict: Dict) -> Dict:
                     effective_b_row=effective_b_row,
                 )
 
-                logger.info(f'rid {rid}, round{i} finish pre-exe commands, ready to call openai client')
-
                 extra_body: Dict[str, Any] = {"ignore_eos": True}
                 context_id_for_chat = context_cache_id if artesia_context is not None else None
 
@@ -658,9 +704,8 @@ def simulate_sync(req_dict: Dict) -> Dict:
                 prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
                 completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
                 cached_tokens = get_cached_tokens_from_completion(completion)
-                sum_decode_time, avg_decode_time, p50_decode_time, p95_decode_time = (
-                    get_decode_time_stats(completion)
-                )
+                sum_decode_time = get_decode_time_stats(completion)
+                
                 prefill_time = getattr(completion, "prefill_time", None)
                 num_local_cache = getattr(completion, "num_local_cache", None)
                 num_global_cache = getattr(completion, "num_global_cache", None)
@@ -674,9 +719,6 @@ def simulate_sync(req_dict: Dict) -> Dict:
                     cached_tokens,
                     prefill_time,
                     sum_decode_time,
-                    avg_decode_time,
-                    p50_decode_time,
-                    p95_decode_time,
                     num_local_cache,
                     num_global_cache,
                 ]
@@ -684,6 +726,9 @@ def simulate_sync(req_dict: Dict) -> Dict:
 
                 if req.wait_time and req.wait_time[i] > 0:
                     time.sleep(req.wait_time[i])
+
+                logger.info(f"agent_id {agent_id}, round {i} Done!")
+
         finally:
             if contextcake_client is not None:
                 contextcake_client.close()
@@ -691,7 +736,7 @@ def simulate_sync(req_dict: Dict) -> Dict:
     end_time = time.perf_counter()
     processing_time = end_time - start_time
 
-    logger.info(f"Request completed in {processing_time:.3f}s")
+    logger.info(f"agent_id {agent_id} completed in {processing_time:.3f}s")
 
     return {
         "history_rounds_by_context": history_rounds_by_context,
@@ -765,11 +810,14 @@ def run_server(
     max_concurrent: Optional[int] = None,
     work_delay: Optional[float] = None,
     contextcake_base_url: Optional[str] = None,
+    result_dir: Optional[str] = None,
 ):
     """启动服务器"""
     del max_concurrent, work_delay
     if contextcake_base_url is not None:
         set_contextcake_base_url(contextcake_base_url)
+    if result_dir is not None:
+        set_result_dir(result_dir)
 
     uvicorn.run(
         "main_art:app",
@@ -789,12 +837,17 @@ def run_server(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=12306)
+    parser.add_argument("--port", type=int, default=12309)
     parser.add_argument("--workers", type=int, default=1, help="Number of uvicorn workers")
     parser.add_argument(
         "--contextcake-base-url",
         default=get_contextcake_base_url(),
         help="Base URL of the ContextCake server",
+    )
+    parser.add_argument(
+        "--result-dir",
+        default=str(_resolve_result_dir(os.getenv("LOAD_GEN_RESULT_DIR"))),
+        help="Directory used by main_art.py to write result CSV files",
     )
     args = parser.parse_args()
 
@@ -803,4 +856,5 @@ if __name__ == "__main__":
         port=args.port,
         workers=args.workers,
         contextcake_base_url=args.contextcake_base_url,
+        result_dir=args.result_dir,
     )
