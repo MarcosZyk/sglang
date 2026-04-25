@@ -107,7 +107,9 @@ async def test_context_lifecycle_and_one_off() -> None:
         )
     )
     assert completion.usage.prompt_tokens == 5
-    assert len(runtime.contexts["ctx"].messages) == 3
+    assert [message.role for message in runtime.contexts["ctx"].messages] == ["system", "user"]
+    assert runtime.contexts["ctx"].state == "suspend"
+    assert all(message.state == "suspend" for message in runtime.contexts["ctx"].messages)
 
     await runtime.suspend("ctx")
     assert runtime.contexts["ctx"].state == "suspend"
@@ -172,7 +174,7 @@ async def test_prefix_fetch_prefill_and_write_timing() -> None:
     assert completion.usage.prompt_tokens == 0
     assert completion.usage.prompt_tokens_details.cached_tokens == 5
     assert completion.decode_time == pytest.approx([0.2], rel=1e-6)
-    assert completion.prefill_time == pytest.approx(0.009, rel=1e-6)
+    assert completion.prefill_time == pytest.approx(0.007, rel=1e-6)
 
     partial_completion = await runtime.generate(
         request_for(
@@ -183,8 +185,8 @@ async def test_prefix_fetch_prefill_and_write_timing() -> None:
     )
     assert partial_completion.num_local_cache == 2
     assert partial_completion.num_global_cache == 2
-    assert partial_completion.usage.prompt_tokens == 4
-    assert partial_completion.prefill_time == pytest.approx(0.012, rel=1e-6)
+    assert partial_completion.usage.prompt_tokens == 5
+    assert partial_completion.prefill_time == pytest.approx(0.507, rel=1e-6)
 
 
 @pytest.mark.asyncio
@@ -201,7 +203,7 @@ async def test_eviction_policy_uses_context_state_time_and_tail_order(
 ) -> None:
     runtime = build_runtime(
         eviction_policy=eviction_policy,
-        gpu_capacity_gb=0.000006,
+        gpu_capacity_gb=0.000004,
         enable_artesia=True,
     )
     attach_monotonic_counter(runtime)
@@ -246,13 +248,12 @@ async def test_eviction_policy_uses_context_state_time_and_tail_order(
     assert [message.role for message in untouched_context.messages if message.placement == "gpu"] == [
         "system",
         "user",
-        "assistant",
     ]
 
 
 @pytest.mark.asyncio
 async def test_suspend_contexts_are_evicted_before_older_durable_contexts() -> None:
-    runtime = build_runtime(eviction_policy="lru", gpu_capacity_gb=0.000006, enable_artesia=True)
+    runtime = build_runtime(eviction_policy="lru", gpu_capacity_gb=0.000004, enable_artesia=True)
     attach_monotonic_counter(runtime)
 
     await runtime.create_context("ctx-durable", "durable")
@@ -262,6 +263,11 @@ async def test_suspend_contexts_are_evicted_before_older_durable_contexts() -> N
             [("system", "a"), ("user", "b")],
             max_tokens=1,
         )
+    )
+    runtime._set_context_state(
+        runtime.contexts["ctx-durable"],
+        "durable",
+        touch_timestamp=False,
     )
 
     await runtime.create_context("ctx-suspend", "durable")
@@ -289,7 +295,6 @@ async def test_suspend_contexts_are_evicted_before_older_durable_contexts() -> N
     assert [message.role for message in runtime.contexts["ctx-durable"].messages if message.placement == "gpu"] == [
         "system",
         "user",
-        "assistant",
     ]
 
 
@@ -313,7 +318,7 @@ async def test_pinned_prefix_keeps_head_and_evicts_tail_first() -> None:
         pinned_message_ids={pinned_message_id},
     )
 
-    assert offload_time == pytest.approx(0.002, rel=1e-6)
+    assert offload_time == pytest.approx(0.001, rel=1e-6)
     assert [message.role for message in runtime.contexts["ctx"].messages if message.placement == "gpu"] == [
         "system"
     ]
@@ -335,14 +340,14 @@ async def test_context_state_timestamp_refreshes_on_suspend_and_generate() -> No
         )
     )
     after_generate = runtime.contexts["ctx"].state_changed_at_ns
-    assert runtime.contexts["ctx"].state == "durable"
+    assert runtime.contexts["ctx"].state == "suspend"
     assert after_generate > created_at
 
     await runtime.suspend("ctx")
     after_suspend = runtime.contexts["ctx"].state_changed_at_ns
     assert runtime.contexts["ctx"].state == "suspend"
     assert all(message.state == "suspend" for message in runtime.contexts["ctx"].messages)
-    assert after_suspend > after_generate
+    assert after_suspend == after_generate
 
     await runtime.generate(
         request_for(
@@ -352,9 +357,9 @@ async def test_context_state_timestamp_refreshes_on_suspend_and_generate() -> No
         )
     )
     final_context = runtime.contexts["ctx"]
-    assert final_context.state == "durable"
-    assert final_context.state_changed_at_ns == after_suspend + 1
-    assert all(message.state == "durable" for message in final_context.messages)
+    assert final_context.state == "suspend"
+    assert final_context.state_changed_at_ns == after_suspend + 2
+    assert all(message.state == "suspend" for message in final_context.messages)
 
 
 @pytest.mark.asyncio
@@ -384,7 +389,7 @@ async def test_non_artesia_delete_context_is_noop() -> None:
 
 
 @pytest.mark.asyncio
-async def test_non_artesia_suspend_is_noop() -> None:
+async def test_non_artesia_suspend_sets_state_without_refreshing_timestamp() -> None:
     runtime = build_runtime(gpu_capacity_gb=0.00002)
     attach_monotonic_counter(runtime)
     await runtime.create_context("ctx", "durable")
@@ -397,14 +402,14 @@ async def test_non_artesia_suspend_is_noop() -> None:
     )
 
     context = runtime.contexts["ctx"]
+    runtime._set_context_state(context, "durable", touch_timestamp=False)
     timestamp_before = context.state_changed_at_ns
-    message_states_before = [message.state for message in context.messages]
     response = await runtime.suspend("ctx")
 
-    assert response == {"status": "ok", "context_id": "ctx", "num_messages": 3}
-    assert context.state == "durable"
+    assert response == {"status": "ok", "context_id": "ctx", "num_messages": 2}
+    assert context.state == "suspend"
     assert context.state_changed_at_ns == timestamp_before
-    assert [message.state for message in context.messages] == message_states_before
+    assert [message.state for message in context.messages] == ["suspend", "suspend"]
 
 
 @pytest.mark.asyncio
@@ -435,7 +440,7 @@ async def test_non_artesia_truncate_archives_suffix_without_freeing_storage() ->
     assert len(runtime._archived_contexts) == 1
     archived_context = next(iter(runtime._archived_contexts.values()))
     assert archived_context.context_id.startswith("archive:ctx:truncate:")
-    assert [message.role for message in archived_context.messages] == ["user", "assistant"]
+    assert [message.role for message in archived_context.messages] == ["user"]
     assert archived_context.state == context.state
     assert archived_context.state_changed_at_ns == timestamp_before
 
@@ -462,7 +467,7 @@ async def test_non_artesia_one_off_archives_suffix_after_generate() -> None:
     assert len(runtime._archived_contexts) == 1
     archived_context = next(iter(runtime._archived_contexts.values()))
     assert archived_context.context_id.startswith("archive:ctx:one_off:")
-    assert [message.role for message in archived_context.messages] == ["user", "assistant"]
+    assert [message.role for message in archived_context.messages] == ["user"]
     assert all(message.placement == "gpu" for message in archived_context.messages)
     assert archived_context.state_changed_at_ns == context.state_changed_at_ns
 
@@ -482,7 +487,7 @@ async def test_non_artesia_prefill_touches_only_active_context_timestamp() -> No
         )
     )
     after_first_generate = runtime.contexts["ctx"].state_changed_at_ns
-    assert after_first_generate == created_at + 1
+    assert after_first_generate == created_at + 2
 
     await runtime.one_off("ctx", 1)
     await runtime.generate(
@@ -495,7 +500,7 @@ async def test_non_artesia_prefill_touches_only_active_context_timestamp() -> No
     active_context = runtime.contexts["ctx"]
     archived_context = next(iter(runtime._archived_contexts.values()))
     archived_timestamp = archived_context.state_changed_at_ns
-    assert active_context.state_changed_at_ns == after_first_generate + 1
+    assert active_context.state_changed_at_ns == after_first_generate + 2
 
     await runtime.generate(
         request_for(
@@ -504,13 +509,13 @@ async def test_non_artesia_prefill_touches_only_active_context_timestamp() -> No
             max_tokens=1,
         )
     )
-    assert runtime.contexts["ctx"].state_changed_at_ns == active_context.state_changed_at_ns + 1
+    assert runtime.contexts["ctx"].state_changed_at_ns == active_context.state_changed_at_ns + 2
     assert archived_context.state_changed_at_ns == archived_timestamp
 
 
 @pytest.mark.asyncio
 async def test_non_artesia_offload_includes_archived_contexts_and_stops_when_enough() -> None:
-    runtime = build_runtime(gpu_capacity_gb=0.000005)
+    runtime = build_runtime(gpu_capacity_gb=0.000004)
     attach_monotonic_counter(runtime)
 
     await runtime.create_context("ctx-old", "durable")
@@ -536,19 +541,65 @@ async def test_non_artesia_offload_includes_archived_contexts_and_stops_when_eno
     archived_gpu_roles_before = [
         message.role for message in archived_context.messages if message.placement == "gpu"
     ]
-    assert archived_gpu_roles_before == ["user", "assistant"]
+    assert archived_gpu_roles_before == ["user"]
 
     offload_time = runtime._make_room_for_gpu_bytes(
         required_bytes=2 * runtime.config.kv_cache_bytes_per_token,
         pinned_message_ids=set(),
     )
 
-    assert offload_time == pytest.approx(0.002, rel=1e-6)
+    assert offload_time == pytest.approx(0.001, rel=1e-6)
     assert [message.role for message in archived_context.messages if message.placement == "gpu"] == []
     assert [message.role for message in runtime.contexts["ctx-new"].messages if message.placement == "gpu"] == [
         "system",
-        "assistant",
     ]
+
+
+@pytest.mark.asyncio
+async def test_decode_does_not_modify_context_and_truncate_can_run_during_decode() -> None:
+    decode_started = asyncio.Event()
+    release_decode = asyncio.Event()
+
+    async def staged_sleep(seconds: float) -> None:
+        rounded = round(seconds, 3)
+        if rounded == 1.0:
+            decode_started.set()
+            await release_decode.wait()
+            return
+        await asyncio.sleep(0)
+
+    runtime = build_runtime(
+        gpu_capacity_gb=0.00002,
+        decode_throughput_tps=1.0,
+        prefill_throughput_tps=100.0,
+        enable_artesia=True,
+        sleep_func=staged_sleep,
+    )
+    await runtime.create_context("ctx", "durable")
+
+    task = asyncio.create_task(
+        runtime.generate(
+            request_for(
+                "ctx",
+                [("system", "a"), ("user", "b")],
+                max_tokens=1,
+            )
+        )
+    )
+    await decode_started.wait()
+
+    assert [message.role for message in runtime.contexts["ctx"].messages] == ["system", "user"]
+    assert runtime.contexts["ctx"].state == "suspend"
+
+    truncate_response = await runtime.truncate("ctx", 1)
+    assert truncate_response == {"status": "ok", "context_id": "ctx", "kept_messages": 1}
+    assert [message.role for message in runtime.contexts["ctx"].messages] == ["system"]
+
+    release_decode.set()
+    completion = await task
+
+    assert completion.usage.completion_tokens == 1
+    assert [message.role for message in runtime.contexts["ctx"].messages] == ["system"]
 
 
 @pytest.mark.asyncio
@@ -634,8 +685,7 @@ async def test_prefill_is_serial_and_second_prefill_can_overlap_first_decode() -
     assert len(decode_starts) == 2
     assert len(decode_ends) == 2
     assert prefill_starts[1] >= prefill_ends[0]
-    assert prefill_starts[1] >= prefill_ends[0]
-    assert prefill_starts[1] >= decode_starts[0]
+    assert decode_starts[0] < prefill_ends[1]
     assert prefill_starts[1] < decode_ends[0]
 
 

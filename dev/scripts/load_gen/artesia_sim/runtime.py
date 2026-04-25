@@ -210,13 +210,7 @@ class ArtesiaSimulator:
         async with self._state_lock:
             context = self._require_context(context_id)
             self._ensure_context_not_busy(context_id)
-            if not self.config.enable_artesia:
-                return {
-                    "status": "ok",
-                    "context_id": context_id,
-                    "num_messages": len(context.messages),
-                }
-            self._set_context_state(context, "suspend")
+            self._set_context_state(context, "suspend", touch_timestamp=False)
             return {
                 "status": "ok",
                 "context_id": context_id,
@@ -250,6 +244,12 @@ class ArtesiaSimulator:
         prompt_roles = [message.role for message in request.messages]
         prompt_token_counts = [len(token_ids) for token_ids in prompt_token_ids]
         context_marked_busy = False
+        prefill_time = 0.0
+        decode_time = self._tokens_to_seconds(
+            request.max_tokens,
+            self.config.decode_throughput_tps,
+        )
+        completion_token_count = request.max_tokens
         try:
             async with self._state_lock:
                 context = self._require_context(request.context_id)
@@ -257,6 +257,7 @@ class ArtesiaSimulator:
                     raise ArtesiaError(409, f"context {request.context_id} is busy")
                 self._busy_contexts.add(request.context_id)
                 context_marked_busy = True
+
             async with self._prefill_lock:
                 async with self._state_lock:
                     context = self._require_context(request.context_id)
@@ -300,40 +301,15 @@ class ArtesiaSimulator:
                 if prefill_compute_time > 0:
                     await self.sleep_func(prefill_compute_time)
 
-            decode_time = self._tokens_to_seconds(
-                request.max_tokens,
-                self.config.decode_throughput_tps,
-            )
-            async with self._decode_semaphore:
-                if decode_time > 0:
-                    await self.sleep_func(decode_time)
-
-            completion_token_ids = self._sample_token_ids(tokenizer, request.max_tokens)
-            completion_text = tokenizer.decode(
-                completion_token_ids,
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=True,
-            )
-            completion_token_count = len(completion_token_ids)
-
-            final_messages = [
-                {"role": role, "token_count": token_count}
-                for role, token_count in zip(prompt_roles, prompt_token_counts)
-            ]
-            final_messages.append(
-                {
-                    "role": "assistant",
-                    "token_count": completion_token_count,
-                }
-            )
-            if self.config.enable_artesia and pending_one_off_index is not None:
-                target_messages = final_messages[:pending_one_off_index]
-            else:
-                target_messages = final_messages
-
-            async with self._prefill_lock:
+                target_messages = [
+                    {"role": role, "token_count": token_count}
+                    for role, token_count in zip(prompt_roles, prompt_token_counts)
+                ]
                 async with self._state_lock:
                     context = self._require_context(request.context_id)
+                    if self.config.enable_artesia and pending_one_off_index is not None:
+                        target_messages = target_messages[:pending_one_off_index]
+
                     reuse_prefix_len = min(matched_prefix_len, len(target_messages))
                     stale_messages = context.messages[reuse_prefix_len:]
                     context.messages = context.messages[:reuse_prefix_len]
@@ -346,6 +322,12 @@ class ArtesiaSimulator:
                     )
                     context.pending_one_off_index = None
 
+                write_time = write_transfer_time + write_offload_time
+                if write_time > 0:
+                    await self.sleep_func(write_time)
+                async with self._state_lock:
+                    context = self._require_context(request.context_id)
+                    self._set_context_state(context, "suspend")
                     if not self.config.enable_artesia and pending_one_off_index is not None:
                         self._archive_context_suffix(
                             context=context,
@@ -353,11 +335,24 @@ class ArtesiaSimulator:
                             operation="one_off",
                         )
 
-                write_time = write_transfer_time + write_offload_time
-                if write_time > 0:
-                    await self.sleep_func(write_time)
+                prefill_time = prefix_time + prefill_compute_time + write_time
 
-            prefill_time = prefix_time + prefill_compute_time + write_time
+            async with self._state_lock:
+                self._busy_contexts.discard(request.context_id)
+                context_marked_busy = False
+
+            async with self._decode_semaphore:
+                if decode_time > 0:
+                    await self.sleep_func(decode_time)
+
+            completion_token_ids = self._sample_token_ids(tokenizer, request.max_tokens)
+            completion_text = tokenizer.decode(
+                completion_token_ids,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=True,
+            )
+            completion_token_count = len(completion_token_ids)
+
             return ChatCompletionResponse(
                 id=f"chatcmpl-{uuid.uuid4().hex}",
                 object="chat.completion",
@@ -582,9 +577,12 @@ class ArtesiaSimulator:
         self,
         context: ContextState,
         state: MessageState,
+        *,
+        touch_timestamp: bool = True,
     ) -> None:
         context.state = state
-        self._touch_context_timestamp(context)
+        if touch_timestamp:
+            self._touch_context_timestamp(context)
         for message in context.messages:
             message.state = state
 
