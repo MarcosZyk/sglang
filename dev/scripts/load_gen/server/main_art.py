@@ -105,7 +105,8 @@ def get_tokenizer(tokenizer_name: str) -> AutoTokenizer:
         logger.info(f"Loading tokenizer: {tokenizer_name}")
         _tokenizer_cache[tokenizer_name] = AutoTokenizer.from_pretrained(
             tokenizer_name,
-            use_fast=True
+            use_fast=True,
+            trust_remote_code=True
         )
     return _tokenizer_cache[tokenizer_name]
 

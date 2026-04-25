@@ -36,25 +36,25 @@ cd /home/khfu/gitkv
 ### 1. 启用 Artesia，offload = LRU
 
 ```bash
-bash /home/khfu/gitkv/sglang/dev/scripts/load_gen/scripts/start_compare_enable_artesia_lru.sh
+bash /home/khfu/Download/sglang/dev/scripts/load_gen/scripts/start_compare_enable_artesia_lru.sh
 ```
 
 ### 2. 启用 Artesia，offload = MRU
 
 ```bash
-bash /home/khfu/gitkv/sglang/dev/scripts/load_gen/scripts/start_compare_enable_artesia_mru.sh
+bash /home/khfu/Download/sglang/dev/scripts/load_gen/scripts/start_compare_enable_artesia_mru.sh
 ```
 
 ### 3. 不启用 Artesia，offload = LRU
 
 ```bash
-bash /home/khfu/gitkv/sglang/dev/scripts/load_gen/scripts/start_compare_disable_artesia_lru.sh
+bash /home/khfu/Download/sglang/dev/scripts/load_gen/scripts/start_compare_disable_artesia_lru.sh
 ```
 
 ### 4. 不启用 Artesia，offload = MRU
 
 ```bash
-bash /home/khfu/gitkv/sglang/dev/scripts/load_gen/scripts/start_compare_disable_artesia_mru.sh
+bash /home/khfu/Download/sglang/dev/scripts/load_gen/scripts/start_compare_disable_artesia_mru.sh
 ```
 
 ## 每个脚本会做什么
@@ -89,9 +89,9 @@ bash /home/khfu/gitkv/sglang/dev/scripts/load_gen/scripts/start_compare_disable_
 例如查看 `enable-artesia-lru` 的 3 个日志：
 
 ```bash
-tail -f /home/khfu/gitkv/sglang/dev/scripts/load_gen/logs/enable-artesia-lru/artesia_sim.log
-tail -f /home/khfu/gitkv/sglang/dev/scripts/load_gen/logs/enable-artesia-lru/main_art.log
-tail -f /home/khfu/gitkv/sglang/dev/scripts/load_gen/logs/enable-artesia-lru/load_generator.log
+tail -f /home/khfu/Download/sglang/dev/scripts/load_gen/logs/enable-artesia-lru/artesia_sim.log
+tail -f /home/khfu/Download/sglang/dev/scripts/load_gen/logs/enable-artesia-lru/main_art.log
+tail -f /home/khfu/Download/sglang/dev/scripts/load_gen/logs/enable-artesia-lru/load_generator.log
 ```
 
 ## 查看结果
@@ -99,7 +99,7 @@ tail -f /home/khfu/gitkv/sglang/dev/scripts/load_gen/logs/enable-artesia-lru/loa
 例如查看 `disable-artesia-mru` 的结果目录：
 
 ```bash
-ls -la /home/khfu/gitkv/sglang/dev/scripts/load_gen/result-disable-artesia-mru
+ls -la /home/khfu/Download/sglang/dev/scripts/load_gen/result-disable-artesia-mru
 ```
 
 `main_art.py` 会把每个 agent 请求的结果写成单独的 CSV 文件。

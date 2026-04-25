@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 METHOD_NAME="disable-artesia-mru"
 
+PYTHON="/home/khfu/miniconda3/envs/sgl/bin/python"
+
 ARTESIA_PORT=50363
 SERVER_PORT=12313
 RESULT_DIR="$ROOT_DIR/result-disable-artesia-mru"
@@ -40,7 +42,7 @@ echo "Starting ${METHOD_NAME}"
 ARTESIA_PID="$(
     start_process \
         "$ARTESIA_LOG" \
-        bash -lc "cd '$ROOT_DIR/artesia_sim' && PYTHONUNBUFFERED=1 python main.py \
+        bash -lc "cd '$ROOT_DIR/artesia_sim' && PYTHONUNBUFFERED=1 ${PYTHON} main.py \
             --host 0.0.0.0 \
             --port ${ARTESIA_PORT} \
             --workers 1 \
@@ -61,7 +63,7 @@ sleep 3
 SERVER_PID="$(
     start_process \
         "$SERVER_LOG" \
-        bash -lc "cd '$ROOT_DIR/server' && PYTHONUNBUFFERED=1 python main_art.py \
+        bash -lc "cd '$ROOT_DIR/server' && PYTHONUNBUFFERED=1 ${PYTHON} main_art.py \
             --host 0.0.0.0 \
             --port ${SERVER_PORT} \
             --workers 1 \
@@ -75,7 +77,7 @@ sleep 3
 CLIENT_PID="$(
     start_process \
         "$CLIENT_LOG" \
-        bash -lc "cd '$ROOT_DIR/client' && PYTHONUNBUFFERED=1 python load_generator.py \
+        bash -lc "cd '$ROOT_DIR/client' && PYTHONUNBUFFERED=1 ${PYTHON} load_generator.py \
             --url ${CLIENT_URL} \
             --rps ${CLIENT_RPS} \
             --requests ${CLIENT_REQUESTS} \
