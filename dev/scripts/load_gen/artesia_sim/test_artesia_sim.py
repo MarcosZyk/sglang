@@ -14,7 +14,7 @@ if str(ROOT) not in sys.path:
 
 from main import create_app
 from models import ChatCompletionRequest
-from runtime import ArtesiaError, ArtesiaSimulator, SimulatorConfig
+from runtime import ArtesiaError, ArtesiaSimulator, SimulatorConfig, StoredMessage
 
 
 class FakeTokenizer:
@@ -52,6 +52,7 @@ def build_runtime(
     prefill_throughput_tps: float = 1000.0,
     decode_max_concurrency: int = 1,
     gpu_capacity_gb: float = 0.000003,
+    cpu_capacity_gb: float = 384.0,
     enable_artesia: bool = False,
     sleep_func=noop_sleep,
 ) -> ArtesiaSimulator:
@@ -64,6 +65,7 @@ def build_runtime(
             decode_max_concurrency=decode_max_concurrency,
             kv_cache_kb_per_token=1.0,
             gpu_capacity_gb=gpu_capacity_gb,
+            cpu_capacity_gb=cpu_capacity_gb,
             eviction_policy=eviction_policy,
             enable_artesia=enable_artesia,
             seed=123,
@@ -92,6 +94,188 @@ def attach_monotonic_counter(runtime: ArtesiaSimulator, start: int = 1) -> None:
         return current
 
     runtime._now_ns = next_ns  # type: ignore[method-assign]
+
+
+def add_stored_message(
+    runtime: ArtesiaSimulator,
+    context_id: str,
+    *,
+    role: str,
+    token_count: int,
+    placement: str,
+) -> StoredMessage:
+    context = runtime.contexts[context_id]
+    message = StoredMessage(
+        message_id=runtime._next_message_id(),
+        role=role,
+        token_count=token_count,
+        placement=placement,
+        state=context.state,
+    )
+    context.messages.append(message)
+    message_bytes = message.kv_bytes(runtime.config.kv_cache_bytes_per_token)
+    if placement == "gpu":
+        runtime._gpu_bytes_used += message_bytes
+    else:
+        runtime._cpu_bytes_used += message_bytes
+    return message
+
+
+def context_roles_by_placement(
+    runtime: ArtesiaSimulator,
+    context_id: str,
+    placement: str,
+) -> list[str]:
+    return [
+        message.role
+        for message in runtime.contexts[context_id].messages
+        if message.placement == placement
+    ]
+
+
+def test_cpu_capacity_bytes_property() -> None:
+    config = SimulatorConfig(cpu_capacity_gb=1.5)
+    assert config.cpu_capacity_bytes == 1_500_000_000
+
+
+@pytest.mark.asyncio
+async def test_cpu_eviction_deletes_tail_message_and_stops_when_enough() -> None:
+    runtime = build_runtime(
+        gpu_capacity_gb=0.00001,
+        cpu_capacity_gb=0.000002,
+        enable_artesia=True,
+    )
+    await runtime.create_context("ctx-cpu", "durable")
+    await runtime.create_context("ctx-offload", "durable")
+
+    add_stored_message(runtime, "ctx-cpu", role="system", token_count=1, placement="cpu")
+    add_stored_message(runtime, "ctx-cpu", role="user", token_count=1, placement="cpu")
+    gpu_message = add_stored_message(
+        runtime,
+        "ctx-offload",
+        role="assistant",
+        token_count=1,
+        placement="gpu",
+    )
+
+    offload_time = runtime._offload_message_to_cpu(gpu_message, pinned_message_ids=set())
+
+    assert offload_time == pytest.approx(0.001, rel=1e-6)
+    assert context_roles_by_placement(runtime, "ctx-cpu", "cpu") == ["system"]
+    assert context_roles_by_placement(runtime, "ctx-offload", "cpu") == ["assistant"]
+    assert runtime.cpu_bytes_used == 2 * runtime.config.kv_cache_bytes_per_token
+
+
+@pytest.mark.asyncio
+async def test_cpu_eviction_prefers_suspend_context_when_artesia_enabled() -> None:
+    runtime = build_runtime(
+        gpu_capacity_gb=0.00001,
+        cpu_capacity_gb=0.000002,
+        enable_artesia=True,
+    )
+    attach_monotonic_counter(runtime)
+    await runtime.create_context("ctx-durable", "durable")
+    await runtime.create_context("ctx-suspend", "durable")
+    await runtime.create_context("ctx-offload", "durable")
+
+    add_stored_message(runtime, "ctx-durable", role="system", token_count=1, placement="cpu")
+    add_stored_message(runtime, "ctx-suspend", role="user", token_count=1, placement="cpu")
+    runtime._set_context_state(runtime.contexts["ctx-suspend"], "suspend")
+    gpu_message = add_stored_message(
+        runtime,
+        "ctx-offload",
+        role="assistant",
+        token_count=1,
+        placement="gpu",
+    )
+
+    runtime._offload_message_to_cpu(gpu_message, pinned_message_ids=set())
+
+    assert context_roles_by_placement(runtime, "ctx-suspend", "cpu") == []
+    assert context_roles_by_placement(runtime, "ctx-durable", "cpu") == ["system"]
+
+
+@pytest.mark.asyncio
+async def test_cpu_eviction_ignores_state_when_artesia_disabled() -> None:
+    runtime = build_runtime(
+        eviction_policy="mru",
+        gpu_capacity_gb=0.00001,
+        cpu_capacity_gb=0.000002,
+        enable_artesia=False,
+    )
+    attach_monotonic_counter(runtime)
+    await runtime.create_context("ctx-old", "durable")
+    add_stored_message(runtime, "ctx-old", role="system", token_count=1, placement="cpu")
+    runtime._set_context_state(runtime.contexts["ctx-old"], "suspend")
+
+    await runtime.create_context("ctx-new", "durable")
+    add_stored_message(runtime, "ctx-new", role="user", token_count=1, placement="cpu")
+
+    await runtime.create_context("ctx-offload", "durable")
+    gpu_message = add_stored_message(
+        runtime,
+        "ctx-offload",
+        role="assistant",
+        token_count=1,
+        placement="gpu",
+    )
+
+    runtime._offload_message_to_cpu(gpu_message, pinned_message_ids=set())
+
+    assert context_roles_by_placement(runtime, "ctx-old", "cpu") == ["system"]
+    assert context_roles_by_placement(runtime, "ctx-new", "cpu") == []
+
+
+@pytest.mark.asyncio
+async def test_cpu_eviction_skips_pinned_cpu_messages() -> None:
+    runtime = build_runtime(
+        gpu_capacity_gb=0.00001,
+        cpu_capacity_gb=0.000002,
+        enable_artesia=True,
+    )
+    await runtime.create_context("ctx-pinned", "durable")
+    await runtime.create_context("ctx-evictable", "durable")
+    await runtime.create_context("ctx-offload", "durable")
+
+    pinned_message = add_stored_message(
+        runtime,
+        "ctx-pinned",
+        role="system",
+        token_count=1,
+        placement="cpu",
+    )
+    add_stored_message(runtime, "ctx-evictable", role="user", token_count=1, placement="cpu")
+    gpu_message = add_stored_message(
+        runtime,
+        "ctx-offload",
+        role="assistant",
+        token_count=1,
+        placement="gpu",
+    )
+
+    runtime._offload_message_to_cpu(
+        gpu_message,
+        pinned_message_ids={pinned_message.message_id},
+    )
+
+    assert context_roles_by_placement(runtime, "ctx-pinned", "cpu") == ["system"]
+    assert context_roles_by_placement(runtime, "ctx-evictable", "cpu") == []
+
+
+@pytest.mark.asyncio
+async def test_cpu_eviction_raises_507_when_single_message_exceeds_cpu_capacity() -> None:
+    runtime = build_runtime(
+        gpu_capacity_gb=0.00001,
+        cpu_capacity_gb=0.000001,
+        enable_artesia=True,
+    )
+    await runtime.create_context("ctx", "durable")
+    gpu_message = add_stored_message(runtime, "ctx", role="system", token_count=2, placement="gpu")
+
+    with pytest.raises(ArtesiaError) as exc_info:
+        runtime._offload_message_to_cpu(gpu_message, pinned_message_ids=set())
+    assert exc_info.value.status_code == 507
+
 
 
 @pytest.mark.asyncio

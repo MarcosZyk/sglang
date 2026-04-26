@@ -21,6 +21,7 @@ DECODE_TPS=65
 DECODE_MAX_CONCURRENCY=9
 KV_CACHE_KB_PER_TOKEN=144
 GPU_CAPACITY_GB=128
+CPU_CAPACITY_GB=384
 TOKENIZER_NAME="Qwen/Qwen3-8B"
 CLIENT_RPS=0.045
 CLIENT_REQUESTS=80
@@ -56,6 +57,7 @@ ARTESIA_PID="$(
             --decode-max-concurrency ${DECODE_MAX_CONCURRENCY} \
             --kv-cache-kb-per-token ${KV_CACHE_KB_PER_TOKEN} \
             --gpu-capacity-gb ${GPU_CAPACITY_GB} \
+            --cpu-capacity-gb ${CPU_CAPACITY_GB} \
             --eviction-policy lru \
             --tokenizer ${TOKENIZER_NAME}"
 )"

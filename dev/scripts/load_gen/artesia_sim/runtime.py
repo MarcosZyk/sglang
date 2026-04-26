@@ -58,6 +58,7 @@ class SimulatorConfig:
     decode_max_concurrency: int = 1
     kv_cache_kb_per_token: float = 144.0
     gpu_capacity_gb: float = 24.0
+    cpu_capacity_gb: float = 384.0
     eviction_policy: Literal["lru", "mru"] = "lru"
     enable_artesia: bool = False
     tokenizer_name: Optional[str] = None
@@ -78,6 +79,10 @@ class SimulatorConfig:
     @property
     def gpu_capacity_bytes(self) -> int:
         return int(self.gpu_capacity_gb * 1_000_000_000)
+
+    @property
+    def cpu_capacity_bytes(self) -> int:
+        return int(self.cpu_capacity_gb * 1_000_000_000)
 
 
 @dataclass
@@ -496,8 +501,26 @@ class ArtesiaSimulator:
         )
         offload_time = 0.0
         for message in messages_to_offload:
-            offload_time += self._offload_message_to_cpu(message)
+            offload_time += self._offload_message_to_cpu(
+                message,
+                pinned_message_ids=pinned_message_ids,
+            )
         return offload_time
+
+    def _make_room_for_cpu_bytes(
+        self,
+        *,
+        required_bytes: int,
+        pinned_message_ids: set[str],
+    ) -> None:
+        if required_bytes > self.config.cpu_capacity_bytes:
+            raise ArtesiaError(507, "required data cannot fit in CPU memory")
+        messages_to_delete = self._plan_cpu_eviction_messages(
+            required_bytes=required_bytes,
+            pinned_message_ids=pinned_message_ids,
+        )
+        for context, message in messages_to_delete:
+            self._delete_message_from_cpu(context, message)
 
     def _plan_offload_messages(
         self,
@@ -519,11 +542,54 @@ class ArtesiaSimulator:
                     return planned_messages
         raise ArtesiaError(507, "unable to free enough GPU memory")
 
+    def _plan_cpu_eviction_messages(
+        self,
+        *,
+        required_bytes: int,
+        pinned_message_ids: set[str],
+    ) -> List[tuple[ContextState, StoredMessage]]:
+        overflow_bytes = self._cpu_bytes_used + required_bytes - self.config.cpu_capacity_bytes
+        if overflow_bytes <= 0:
+            return []
+
+        planned_messages: List[tuple[ContextState, StoredMessage]] = []
+        freed_bytes = 0
+        for context in self._ordered_eviction_contexts(
+            pinned_message_ids=pinned_message_ids,
+            placement="cpu",
+        ):
+            for message in self._iter_tail_messages(
+                context,
+                pinned_message_ids=pinned_message_ids,
+                placement="cpu",
+            ):
+                planned_messages.append((context, message))
+                freed_bytes += message.kv_bytes(self.config.kv_cache_bytes_per_token)
+                if freed_bytes >= overflow_bytes:
+                    return planned_messages
+        raise ArtesiaError(507, "unable to free enough CPU memory")
+
     def _ordered_offload_contexts(self, pinned_message_ids: set[str]) -> List[ContextState]:
+        return self._ordered_eviction_contexts(
+            pinned_message_ids=pinned_message_ids,
+            placement="gpu",
+        )
+
+    def _ordered_eviction_contexts(
+        self,
+        *,
+        pinned_message_ids: set[str],
+        placement: Placement,
+    ) -> List[ContextState]:
         candidate_contexts = [
             context
             for context in self._iter_all_contexts()
-            if self._pick_tail_gpu_message(context, pinned_message_ids) is not None
+            if self._pick_tail_message(
+                context,
+                pinned_message_ids=pinned_message_ids,
+                placement=placement,
+            )
+            is not None
         ]
         if not self.config.enable_artesia:
             if self.config.eviction_policy == "lru":
@@ -536,7 +602,7 @@ class ArtesiaSimulator:
                     candidate_contexts,
                     key=lambda context: (-context.state_changed_at_ns, context.context_id),
                 )
-            
+
         suspend_contexts = [context for context in candidate_contexts if context.state == "suspend"]
         durable_contexts = [context for context in candidate_contexts if context.state == "durable"]
 
@@ -556,8 +622,17 @@ class ArtesiaSimulator:
             key=lambda context: (-context.state_changed_at_ns, context.context_id),
         )
 
-    def _offload_message_to_cpu(self, message: StoredMessage) -> float:
+    def _offload_message_to_cpu(
+        self,
+        message: StoredMessage,
+        *,
+        pinned_message_ids: set[str],
+    ) -> float:
         message_bytes = message.kv_bytes(self.config.kv_cache_bytes_per_token)
+        self._make_room_for_cpu_bytes(
+            required_bytes=message_bytes,
+            pinned_message_ids=pinned_message_ids,
+        )
         message.placement = "cpu"
         self._gpu_bytes_used -= message_bytes
         self._cpu_bytes_used += message_bytes
@@ -565,6 +640,23 @@ class ArtesiaSimulator:
             message_bytes,
             self.config.cpu_gpu_bytes_per_second,
         )
+
+    def _delete_message_from_cpu(
+        self,
+        context: ContextState,
+        message: StoredMessage,
+    ) -> None:
+        if message.placement != "cpu":
+            raise ArtesiaError(500, "attempted to delete non-CPU message from CPU storage")
+
+        for index in range(len(context.messages) - 1, -1, -1):
+            if context.messages[index] is not message:
+                continue
+            message_bytes = message.kv_bytes(self.config.kv_cache_bytes_per_token)
+            del context.messages[index]
+            self._cpu_bytes_used -= message_bytes
+            return
+        raise ArtesiaError(500, "attempted to delete a CPU message not owned by its context")
 
     def _release_message_storage(self, message: StoredMessage) -> None:
         message_bytes = message.kv_bytes(self.config.kv_cache_bytes_per_token)
@@ -594,7 +686,24 @@ class ArtesiaSimulator:
         context: ContextState,
         pinned_message_ids: set[str],
     ) -> Optional[StoredMessage]:
-        for message in self._iter_tail_gpu_messages(context, pinned_message_ids):
+        return self._pick_tail_message(
+            context,
+            pinned_message_ids=pinned_message_ids,
+            placement="gpu",
+        )
+
+    def _pick_tail_message(
+        self,
+        context: ContextState,
+        *,
+        pinned_message_ids: set[str],
+        placement: Placement,
+    ) -> Optional[StoredMessage]:
+        for message in self._iter_tail_messages(
+            context,
+            pinned_message_ids=pinned_message_ids,
+            placement=placement,
+        ):
             return message
         return None
 
@@ -603,8 +712,21 @@ class ArtesiaSimulator:
         context: ContextState,
         pinned_message_ids: set[str],
     ) -> Iterable[StoredMessage]:
+        return self._iter_tail_messages(
+            context,
+            pinned_message_ids=pinned_message_ids,
+            placement="gpu",
+        )
+
+    def _iter_tail_messages(
+        self,
+        context: ContextState,
+        *,
+        pinned_message_ids: set[str],
+        placement: Placement,
+    ) -> Iterable[StoredMessage]:
         for message in reversed(context.messages):
-            if message.placement != "gpu":
+            if message.placement != placement:
                 continue
             if message.message_id in pinned_message_ids:
                 continue

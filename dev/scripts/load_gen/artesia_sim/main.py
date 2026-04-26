@@ -115,6 +115,7 @@ def build_config_from_args(args: argparse.Namespace) -> SimulatorConfig:
         decode_max_concurrency=args.decode_max_concurrency,
         kv_cache_kb_per_token=args.kv_cache_kb_per_token,
         gpu_capacity_gb=args.gpu_capacity_gb,
+        cpu_capacity_gb=args.cpu_capacity_gb,
         eviction_policy=args.eviction_policy,
         enable_artesia=args.enable_artesia,
         tokenizer_name=args.tokenizer,
@@ -134,6 +135,7 @@ def run_server(
     decode_max_concurrency: int = 1,
     kv_cache_kb_per_token: float = 144.0,
     gpu_capacity_gb: float = 24.0,
+    cpu_capacity_gb: float = 384.0,
     eviction_policy: str = "lru",
     enable_artesia: bool = False,
     tokenizer_name: Optional[str] = None,
@@ -148,6 +150,7 @@ def run_server(
             decode_max_concurrency=decode_max_concurrency,
             kv_cache_kb_per_token=kv_cache_kb_per_token,
             gpu_capacity_gb=gpu_capacity_gb,
+            cpu_capacity_gb=cpu_capacity_gb,
             eviction_policy=eviction_policy,
             enable_artesia=enable_artesia,
             tokenizer_name=tokenizer_name,
@@ -178,6 +181,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--decode-max-concurrency", type=int, default=1)
     parser.add_argument("--kv-cache-kb-per-token", type=float, default=144.0)
     parser.add_argument("--gpu-capacity-gb", type=float, default=24.0)
+    parser.add_argument("--cpu-capacity-gb", type=float, default=384.0)
     parser.add_argument("--eviction-policy", choices=["lru", "mru"], default="lru")
     parser.add_argument("--enable-artesia", action="store_true")
     parser.add_argument(
@@ -204,6 +208,7 @@ if __name__ == "__main__":
         decode_max_concurrency=config.decode_max_concurrency,
         kv_cache_kb_per_token=config.kv_cache_kb_per_token,
         gpu_capacity_gb=config.gpu_capacity_gb,
+        cpu_capacity_gb=config.cpu_capacity_gb,
         eviction_policy=config.eviction_policy,
         enable_artesia=config.enable_artesia,
         tokenizer_name=config.tokenizer_name,
