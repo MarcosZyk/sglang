@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-METHOD_NAME="disable-artesia-lru"
+ROOT_DIR="/home/khfu/Download/sglang/dev/scripts/load_gen"
+METHOD_NAME="disable-artesia-mru"
 
 PYTHON="/home/khfu/miniconda3/envs/sgl/bin/python"
 
-ARTESIA_PORT=50362
-SERVER_PORT=12312
-RESULT_DIR="$ROOT_DIR/result-disable-artesia-lru"
+ARTESIA_PORT=50363
+SERVER_PORT=12313
+RESULT_DIR="$ROOT_DIR/result_128G_8/result-disable-artesia-mru"
 LOG_DIR="$ROOT_DIR/logs/$METHOD_NAME"
 
-CPU_GPU_BW_GBPS=20
+CPU_GPU_BW_GBPS=10
 GPU_SGLANG_BW_GBPS=240
 PREFILL_TPS=31000
 DECODE_TPS=65
@@ -19,16 +19,16 @@ DECODE_MAX_CONCURRENCY=9
 KV_CACHE_KB_PER_TOKEN=144
 GPU_CAPACITY_GB=128
 TOKENIZER_NAME="Qwen/Qwen3-8B"
-CLIENT_RPS=0.035
+CLIENT_RPS=0.045
 CLIENT_REQUESTS=80
 CLIENT_URL="http://127.0.0.1:${SERVER_PORT}"
 ARTESIA_BASE_URL="http://127.0.0.1:${ARTESIA_PORT}"
 
-mkdir -p "$RESULT_DIR" "$LOG_DIR"
+mkdir -p "$RESULT_DIR" "$LOG_DIR" "result_128G_8"
 
-ARTESIA_LOG="$LOG_DIR/artesia_sim.log"
-SERVER_LOG="$LOG_DIR/main_art.log"
-CLIENT_LOG="$LOG_DIR/load_generator.log"
+ARTESIA_LOG="$LOG_DIR/result_128G_8/artesia_sim.log"
+SERVER_LOG="$LOG_DIR/result_128G_8/main_art.log"
+CLIENT_LOG="$LOG_DIR/result_128G_8/load_generator.log"
 
 start_process() {
     local log_file="$1"
@@ -53,7 +53,7 @@ ARTESIA_PID="$(
             --decode-max-concurrency ${DECODE_MAX_CONCURRENCY} \
             --kv-cache-kb-per-token ${KV_CACHE_KB_PER_TOKEN} \
             --gpu-capacity-gb ${GPU_CAPACITY_GB} \
-            --eviction-policy lru \
+            --eviction-policy mru \
             --tokenizer ${TOKENIZER_NAME}"
 )"
 echo "artesia_sim pid=${ARTESIA_PID} log=${ARTESIA_LOG}"
