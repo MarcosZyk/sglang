@@ -10,6 +10,7 @@ import numpy as np
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+RESULT_DIR = '../result_128G_8'
 
 METHOD_ORDER = [
     "result-enable-artesia-lru",
@@ -35,7 +36,7 @@ METHOD_COLORS = {
 
 def parse_args() -> argparse.Namespace:
     script_dir = Path(__file__).resolve().parent
-    default_summary_root = script_dir.parent / "result_128G" / "summary"
+    default_summary_root = script_dir.parent / "result_128G_8" / "summary"
 
     parser = argparse.ArgumentParser(
         description="Plot CDF curves from per-method summary CSV files.",
