@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="/home/khfu/Download/sglang/dev/scripts/load_gen"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 METHOD_NAME="disable-artesia-mru-1"
+RESULT_BUCKET="result_128G_1"
 
 PYTHON="/home/khfu/miniconda3/envs/sgl/bin/python"
 
 ARTESIA_PORT=50373
 SERVER_PORT=12323
-RESULT_DIR="$ROOT_DIR/result_128G_1/result-disable-artesia-mru"
-LOG_DIR="$ROOT_DIR/logs/$METHOD_NAME"
+RESULT_DIR="$ROOT_DIR/${RESULT_BUCKET}/result-disable-artesia-mru"
+LOG_DIR="$ROOT_DIR/logs/$METHOD_NAME/$RESULT_BUCKET"
+JSON_FILE="$ROOT_DIR/output_json_flatten/test1.json"
 
 CPU_GPU_BW_GBPS=10
 GPU_SGLANG_BW_GBPS=240
@@ -24,11 +27,11 @@ CLIENT_REQUESTS=80
 CLIENT_URL="http://127.0.0.1:${SERVER_PORT}"
 ARTESIA_BASE_URL="http://127.0.0.1:${ARTESIA_PORT}"
 
-mkdir -p "$RESULT_DIR" "$LOG_DIR" "result_128G_1"
+mkdir -p "$RESULT_DIR" "$LOG_DIR"
 
-ARTESIA_LOG="$LOG_DIR/result_128G_1/artesia_sim.log"
-SERVER_LOG="$LOG_DIR/result_128G_1/main_art.log"
-CLIENT_LOG="$LOG_DIR/result_128G_1/load_generator.log"
+ARTESIA_LOG="$LOG_DIR/artesia_sim.log"
+SERVER_LOG="$LOG_DIR/main_art.log"
+CLIENT_LOG="$LOG_DIR/load_generator.log"
 
 start_process() {
     local log_file="$1"
@@ -81,8 +84,10 @@ CLIENT_PID="$(
             --url ${CLIENT_URL} \
             --rps ${CLIENT_RPS} \
             --requests ${CLIENT_REQUESTS} \
-            --model ${TOKENIZER_NAME}"
+            --model ${TOKENIZER_NAME} \
+            --json-file '$JSON_FILE'"
 )"
 echo "load_generator pid=${CLIENT_PID} log=${CLIENT_LOG}"
 
 echo "Result directory: ${RESULT_DIR}"
+echo "Replay JSON: ${JSON_FILE}"

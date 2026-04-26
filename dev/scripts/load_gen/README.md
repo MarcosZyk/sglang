@@ -13,7 +13,8 @@
 - `server/contextcake_client.py`：ContextCake HTTP 客户端与默认 URL 配置
 - `client/load_generator.py`：负载发生器入口
 - `client/generate_payload.py`：把 replay JSON 转成 `main_art.py` 所需的请求格式
-- `output_aone_flattened/test1.json`：当前 `load_generator.py` 默认读取的 replay 文件
+- `output_json_flatten/test1.json`：`load_generator.py` 的默认 replay 文件
+- `output_json_flatten/test8.json`：8-json 实验脚本使用的 replay 文件
 
 ## 前置条件
 
@@ -49,7 +50,7 @@ curl http://127.0.0.1:12306/api/health
 
 ## 启动 Load Generator
 
-推荐在 `client/` 目录下直接启动。当前脚本默认读取 `../output_aone_flattened/test1.json`，因此工作目录应保持在 `client/`：
+推荐在 `client/` 目录下直接启动。当前脚本默认读取 `output_json_flatten/test1.json`，也可以通过参数指定其它 replay 文件：
 
 ```bash
 cd /home/khfu/gitkv/sglang/dev/scripts/load_gen/client
@@ -57,7 +58,8 @@ python load_generator.py \
   --url http://127.0.0.1:12306 \
   --rps 1 \
   --requests 1 \
-  --model Qwen/Qwen3-8B
+  --model Qwen/Qwen3-8B \
+  --json-file ../output_json_flatten/test1.json
 ```
 
 常用参数：
@@ -66,6 +68,7 @@ python load_generator.py \
 - `--rps`：发送速率
 - `--requests`：总请求数
 - `--model`：会同时写入 `tokenizer_name` 和 `openai_model`
+- `--json-file`：指定本次压测使用的 replay JSON
 
 ## 修改 ContextCake URL
 
@@ -109,18 +112,15 @@ os.getenv("CONTEXTCAKE_BASE_URL", "http://localhost:50350")
 
 ## 常见问题
 
-### 1. `load_generator.py` 找不到 `test1.json`
+### 1. `load_generator.py` 找不到 replay JSON
 
-请确认当前目录是：
+优先检查：
+
+- `--json-file` 指向的路径是否存在
+- 不传 `--json-file` 时，默认文件是否存在：
 
 ```bash
-/home/khfu/gitkv/sglang/dev/scripts/load_gen/client
-```
-
-因为默认路径是相对路径：
-
-```python
-../output_aone_flattened/test1.json
+/home/khfu/gitkv/sglang/dev/scripts/load_gen/output_json_flatten/test1.json
 ```
 
 ### 2. `main_art.py` 连不上 ContextCake

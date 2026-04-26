@@ -15,15 +15,21 @@ def start_server(host: str = "0.0.0.0", port: int = 12306,
     run_server(host=host, port=port, max_concurrent=max_concurrent, work_delay=work_delay)
 
 
-def start_client(server_url: str, rps: float, total_requests: int):
+def start_client(server_url: str, rps: float, total_requests: int, json_file: str = None):
     """启动客户端"""
     from client.load_generator import run_client
-    return run_client(server_url=server_url, rps=rps, total_requests=total_requests)
+    return run_client(
+        server_url=server_url,
+        rps=rps,
+        total_requests=total_requests,
+        json_file=json_file,
+    )
 
 
 def run_full_test(host: str = "localhost", port: int = 12306,
                   max_concurrent: int = 32, rps: float = 100.0,
-                  total_requests: int = 1000, work_delay: float = 0.01):
+                  total_requests: int = 1000, work_delay: float = 0.01,
+                  json_file: str = None):
     """运行完整测试（服务端+客户端）"""
     server_url = f"http://{host}:{port}"
     
@@ -64,7 +70,12 @@ def run_full_test(host: str = "localhost", port: int = 12306,
     print(f"\nStarting load test: {total_requests} requests at {rps} RPS")
     print("-" * 60)
     
-    stats = start_client(server_url=server_url, rps=rps, total_requests=total_requests)
+    stats = start_client(
+        server_url=server_url,
+        rps=rps,
+        total_requests=total_requests,
+        json_file=json_file,
+    )
     
     # 保持服务器运行一会儿以便查看最终统计
     print("\nTest completed. Server will shutdown in 3 seconds...")
@@ -90,6 +101,7 @@ if __name__ == "__main__":
     client_parser.add_argument("--url", default="http://localhost:12306")
     client_parser.add_argument("--rps", type=float, default=100.0)
     client_parser.add_argument("--requests", type=int, default=1000)
+    client_parser.add_argument("--json-file", default=None)
     
     # 完整测试命令
     test_parser = subparsers.add_parser("test", help="运行完整测试")
@@ -99,6 +111,7 @@ if __name__ == "__main__":
     test_parser.add_argument("--rps", type=float, default=100.0)
     test_parser.add_argument("--requests", type=int, default=1000)
     test_parser.add_argument("--work-delay", type=float, default=0.01)
+    test_parser.add_argument("--json-file", default=None)
     
     args = parser.parse_args()
     
@@ -113,7 +126,8 @@ if __name__ == "__main__":
         start_client(
             server_url=args.url,
             rps=args.rps,
-            total_requests=args.requests
+            total_requests=args.requests,
+            json_file=args.json_file,
         )
     elif args.command == "test":
         run_full_test(
@@ -122,7 +136,8 @@ if __name__ == "__main__":
             max_concurrent=args.max_concurrent,
             rps=args.rps,
             total_requests=args.requests,
-            work_delay=args.work_delay
+            work_delay=args.work_delay,
+            json_file=args.json_file,
         )
     else:
         parser.print_help()

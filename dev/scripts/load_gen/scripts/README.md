@@ -1,11 +1,9 @@
 # 对比实验启动说明
 
-这个目录下有 4 个独立的启动脚本，用于分别启动以下 4 组对比方法：
+这个目录下按 replay JSON 分成两组启动脚本：
 
-1. `enable-artesia + lru`
-2. `enable-artesia + mru`
-3. `disable-artesia + lru`
-4. `disable-artesia + mru`
+1. `1_json_script/`：4 个脚本，统一使用 `output_json_flatten/test1.json`
+2. `8_json_script/`：4 个脚本，统一使用 `output_json_flatten/test8.json`
 
 每个脚本都会用 `nohup` 在后台启动 3 个进程：
 
@@ -31,30 +29,54 @@
 cd /home/khfu/gitkv
 ```
 
-## 4 个启动脚本
+## 8 个启动脚本
 
-### 1. 启用 Artesia，offload = LRU
+### 1-json：启用 Artesia，offload = LRU
 
 ```bash
-bash /home/khfu/Download/sglang/dev/scripts/load_gen/scripts/start_compare_enable_artesia_lru.sh
+bash /home/khfu/gitkv/sglang/dev/scripts/load_gen/scripts/1_json_script/start_compare_enable_artesia_lru.sh
 ```
 
-### 2. 启用 Artesia，offload = MRU
+### 1-json：启用 Artesia，offload = MRU
 
 ```bash
-bash /home/khfu/Download/sglang/dev/scripts/load_gen/scripts/start_compare_enable_artesia_mru.sh
+bash /home/khfu/gitkv/sglang/dev/scripts/load_gen/scripts/1_json_script/start_compare_enable_artesia_mru.sh
 ```
 
-### 3. 不启用 Artesia，offload = LRU
+### 1-json：不启用 Artesia，offload = LRU
 
 ```bash
-bash /home/khfu/Download/sglang/dev/scripts/load_gen/scripts/start_compare_disable_artesia_lru.sh
+bash /home/khfu/gitkv/sglang/dev/scripts/load_gen/scripts/1_json_script/start_compare_disable_artesia_lru.sh
 ```
 
-### 4. 不启用 Artesia，offload = MRU
+### 1-json：不启用 Artesia，offload = MRU
 
 ```bash
-bash /home/khfu/Download/sglang/dev/scripts/load_gen/scripts/start_compare_disable_artesia_mru.sh
+bash /home/khfu/gitkv/sglang/dev/scripts/load_gen/scripts/1_json_script/start_compare_disable_artesia_mru.sh
+```
+
+### 8-json：启用 Artesia，offload = LRU
+
+```bash
+bash /home/khfu/gitkv/sglang/dev/scripts/load_gen/scripts/8_json_script/start_compare_enable_artesia_lru.sh
+```
+
+### 8-json：启用 Artesia，offload = MRU
+
+```bash
+bash /home/khfu/gitkv/sglang/dev/scripts/load_gen/scripts/8_json_script/start_compare_enable_artesia_mru.sh
+```
+
+### 8-json：不启用 Artesia，offload = LRU
+
+```bash
+bash /home/khfu/gitkv/sglang/dev/scripts/load_gen/scripts/8_json_script/start_compare_disable_artesia_lru.sh
+```
+
+### 8-json：不启用 Artesia，offload = MRU
+
+```bash
+bash /home/khfu/gitkv/sglang/dev/scripts/load_gen/scripts/8_json_script/start_compare_disable_artesia_mru.sh
 ```
 
 ## 每个脚本会做什么
@@ -62,12 +84,12 @@ bash /home/khfu/Download/sglang/dev/scripts/load_gen/scripts/start_compare_disab
 每个脚本都会：
 
 - 创建对应的结果目录 `result-*`
-- 创建对应的日志目录 `logs/<method>/`
+- 创建对应的日志目录 `logs/<method>/<result_bucket>/`
 - 启动独立端口的 `artesia_sim`
 - 启动独立端口的 `main_art.py`
-- 启动一个 `load_generator.py`
+- 启动一个带 `--json-file` 参数的 `load_generator.py`
 
-脚本启动后会在终端打印 3 个后台进程的 PID，以及对应日志文件路径。
+脚本启动后会在终端打印 3 个后台进程的 PID、对应日志文件路径，以及本次使用的 replay JSON。
 
 ## 端口、结果目录、日志目录对应关系
 
@@ -89,9 +111,9 @@ bash /home/khfu/Download/sglang/dev/scripts/load_gen/scripts/start_compare_disab
 例如查看 `enable-artesia-lru` 的 3 个日志：
 
 ```bash
-tail -f /home/khfu/Download/sglang/dev/scripts/load_gen/logs/enable-artesia-lru/artesia_sim.log
-tail -f /home/khfu/Download/sglang/dev/scripts/load_gen/logs/enable-artesia-lru/main_art.log
-tail -f /home/khfu/Download/sglang/dev/scripts/load_gen/logs/enable-artesia-lru/load_generator.log
+tail -f /home/khfu/gitkv/sglang/dev/scripts/load_gen/logs/enable-artesia-lru/result_128G_8/artesia_sim.log
+tail -f /home/khfu/gitkv/sglang/dev/scripts/load_gen/logs/enable-artesia-lru/result_128G_8/main_art.log
+tail -f /home/khfu/gitkv/sglang/dev/scripts/load_gen/logs/enable-artesia-lru/result_128G_8/load_generator.log
 ```
 
 ## 查看结果
@@ -99,7 +121,7 @@ tail -f /home/khfu/Download/sglang/dev/scripts/load_gen/logs/enable-artesia-lru/
 例如查看 `disable-artesia-mru` 的结果目录：
 
 ```bash
-ls -la /home/khfu/Download/sglang/dev/scripts/load_gen/result-disable-artesia-mru
+ls -la /home/khfu/gitkv/sglang/dev/scripts/load_gen/result_128G_8/result-disable-artesia-mru
 ```
 
 `main_art.py` 会把每个 agent 请求的结果写成单独的 CSV 文件。
@@ -123,6 +145,7 @@ fuser -k 12310/tcp
 
 ## 说明
 
-- 4 个脚本可以分别单独运行。
-- 如果要同时运行多组对比，这 4 套端口已经彼此分开，不会冲突。
-- 每组脚本里的超参数已经写死在脚本中；如果要调整，可以直接编辑对应的 `.sh` 文件。
+- 8 个脚本可以分别单独运行。
+- `1_json_script/` 固定传入 `test1.json`，`8_json_script/` 固定传入 `test8.json`。
+- 如果要同时运行多组对比，请先检查端口是否冲突。
+- 每组脚本里的其它超参数仍然写在对应的 `.sh` 文件中，可以直接编辑。

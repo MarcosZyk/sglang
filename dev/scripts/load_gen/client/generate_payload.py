@@ -4,7 +4,7 @@ from typing import Any, Optional
 
 def read_replay_data(file_path: Optional[str] = None, model_name: str = None):
     """
-    读取 replay_data_3.json 文件并将其转换为指定格式的字典
+    读取 replay JSON 文件并将其转换为指定格式的字典
     
     参数:
     file_path: JSON文件路径
@@ -90,5 +90,5 @@ def read_replay_data(file_path: Optional[str] = None, model_name: str = None):
 
 if __name__ == "__main__":
     # 使用示例
-    result = read_replay_data('../output_aone_flattened/test1.json')
+    result = read_replay_data('../output_json_flatten/test1.json')
     print(result)

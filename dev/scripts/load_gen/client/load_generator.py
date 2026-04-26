@@ -5,7 +5,7 @@ import time
 import threading
 import statistics
 import logging
-import random
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -16,10 +16,12 @@ from urllib3.util.retry import Retry
 from generate_payload import read_replay_data
 from pydantic import BaseModel
 import argparse
-import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_PAYLOAD_JSON = PROJECT_ROOT / "output_json_flatten" / "test1.json"
 
 # ---------- Pydantic 请求模型 ----------
 class SimRequest(BaseModel):
@@ -381,10 +383,34 @@ class LoadGenerator:
         print("=" * 70 + "\n")
 
 
+def resolve_payload_json(json_file: Optional[str] = None) -> Path:
+    """Resolve replay JSON path from CLI input or fall back to the default file."""
+    if json_file is None:
+        resolved_path = DEFAULT_PAYLOAD_JSON
+    else:
+        input_path = Path(json_file).expanduser()
+        if input_path.is_absolute():
+            resolved_path = input_path
+        else:
+            cwd_path = (Path.cwd() / input_path).resolve()
+            if cwd_path.exists():
+                resolved_path = cwd_path
+            else:
+                resolved_path = (PROJECT_ROOT / input_path).resolve()
+
+    if not resolved_path.is_file():
+        raise FileNotFoundError(f"Replay JSON file not found: {resolved_path}")
+
+    return resolved_path
+
+
 def run_client(server_url: str = "http://localhost:12306",
-               rps: float = 100.0, total_requests: int = 1000, model_name: str = None):
+               rps: float = 100.0, total_requests: int = 1000,
+               model_name: str = None, json_file: Optional[str] = None):
     """运行客户端负载测试"""
-    sim_config = read_replay_data('../output_json_flatten/test1.json', model_name)
+    payload_json = resolve_payload_json(json_file)
+    logger.info("Using replay JSON: %s", payload_json)
+    sim_config = read_replay_data(str(payload_json), model_name)
     generator = LoadGenerator(
         server_url=server_url,
         rps=rps,
@@ -405,10 +431,16 @@ if __name__ == "__main__":
     parser.add_argument("--sim-n", type=int, default=10, help="SimRequest n value")
     parser.add_argument("--sim-n-task", type=int, default=3, help="SimRequest n_task value")
     parser.add_argument('--model', default='Qwen/Qwen3-8B', type=str)
+    parser.add_argument(
+        "--json-file",
+        default=None,
+        help=f"Replay JSON file path (default: {DEFAULT_PAYLOAD_JSON})",
+    )
     args = parser.parse_args()
     run_client(
         server_url=args.url,
         rps=args.rps,
         total_requests=args.requests,
         model_name=args.model,
+        json_file=args.json_file,
     )
