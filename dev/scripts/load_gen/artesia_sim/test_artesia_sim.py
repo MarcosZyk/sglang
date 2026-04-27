@@ -333,6 +333,24 @@ async def test_evicted_message_preserves_logical_length_and_stops_prefix_reuse()
     assert all(message.placement == "gpu" for message in runtime.contexts["ctx"].messages)
 
 
+@pytest.mark.asyncio
+async def test_truncate_clamps_msg_index_above_current_context_length() -> None:
+    runtime = build_runtime(enable_artesia=True)
+    await runtime.create_context("ctx", "durable")
+    await runtime.generate(
+        request_for(
+            "ctx",
+            [("system", "a")],
+            max_tokens=1,
+        )
+    )
+
+    response = await runtime.truncate("ctx", 3)
+
+    assert response == {"status": "ok", "context_id": "ctx", "kept_messages": 1}
+    assert [message.role for message in runtime.contexts["ctx"].messages] == ["system"]
+
+
 
 @pytest.mark.asyncio
 async def test_context_lifecycle_and_one_off() -> None:

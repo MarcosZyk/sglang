@@ -175,11 +175,9 @@ class ArtesiaSimulator:
         async with self._state_lock:
             context = self._require_context(context_id)
             self._ensure_context_not_busy(context_id)
-            if msg_index < 0 or msg_index > len(context.messages):
-                raise ArtesiaError(
-                    400,
-                    f"msg_index must be in [0, {len(context.messages)}]",
-                )
+            if msg_index < 0:
+                raise ArtesiaError(400, "msg_index must be >= 0")
+            msg_index = min(msg_index, len(context.messages))
             if self.config.enable_artesia:
                 removed = context.messages[msg_index:]
                 context.messages = context.messages[:msg_index]
