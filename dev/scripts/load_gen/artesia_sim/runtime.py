@@ -144,10 +144,12 @@ class ArtesiaSimulator:
 
     async def create_context(self, context_id: str, context_type: str) -> Dict[str, Any]:
         if context_type != "durable":
+            print("only context_type=durable is supported")
             raise ArtesiaError(400, "only context_type=durable is supported")
 
         async with self._state_lock:
             if context_id in self.contexts:
+                print(f"context {context_id} already exists")
                 raise ArtesiaError(409, f"context {context_id} already exists")
             self.contexts[context_id] = ContextState(
                 context_id=context_id,
@@ -175,9 +177,12 @@ class ArtesiaSimulator:
         async with self._state_lock:
             context = self._require_context(context_id)
             self._ensure_context_not_busy(context_id)
-            if msg_index < 0:
-                raise ArtesiaError(400, "msg_index must be >= 0")
-            msg_index = min(msg_index, len(context.messages))
+            if msg_index < 0 or msg_index > len(context.messages):
+                print(f"msg_index must be in [0, {len(context.messages)}]")
+                raise ArtesiaError(
+                    400,
+                    f"msg_index must be in [0, {len(context.messages)}]",
+                )
             if self.config.enable_artesia:
                 removed = context.messages[msg_index:]
                 context.messages = context.messages[:msg_index]
@@ -257,6 +262,7 @@ class ArtesiaSimulator:
             async with self._state_lock:
                 context = self._require_context(request.context_id)
                 if request.context_id in self._busy_contexts:
+                    print(f"context {request.context_id} is busy")
                     raise ArtesiaError(409, f"context {request.context_id} is busy")
                 self._busy_contexts.add(request.context_id)
                 context_marked_busy = True
@@ -399,11 +405,13 @@ class ArtesiaSimulator:
     def _require_context(self, context_id: str) -> ContextState:
         context = self.contexts.get(context_id)
         if context is None:
+            print(f"context {context_id} does not exist")
             raise ArtesiaError(404, f"context {context_id} does not exist")
         return context
 
     def _ensure_context_not_busy(self, context_id: str) -> None:
         if context_id in self._busy_contexts:
+            print(f"context {context_id} is busy")
             raise ArtesiaError(409, f"context {context_id} is busy")
 
     def _count_matched_prefix(
@@ -433,6 +441,7 @@ class ArtesiaSimulator:
             for message in matched_messages
         )
         if required_bytes > self.config.gpu_capacity_bytes:
+            print("matched prefix cannot fit in GPU memory")
             raise ArtesiaError(507, "matched prefix cannot fit in GPU memory")
 
         pinned_ids = {message.message_id for message in matched_messages}
@@ -467,6 +476,7 @@ class ArtesiaSimulator:
             token_count = int(message_spec["token_count"])
             message_bytes = token_count * self.config.kv_cache_bytes_per_token
             if message_bytes > self.config.gpu_capacity_bytes:
+                print("a single message cannot fit in GPU memory")
                 raise ArtesiaError(507, "a single message cannot fit in GPU memory")
 
             offload_time += self._make_room_for_gpu_bytes(
@@ -495,6 +505,7 @@ class ArtesiaSimulator:
         pinned_message_ids: set[str],
     ) -> float:
         if required_bytes > self.config.gpu_capacity_bytes:
+            print("required data cannot fit in GPU memory")
             raise ArtesiaError(507, "required data cannot fit in GPU memory")
         messages_to_offload = self._plan_offload_messages(
             required_bytes=required_bytes,
@@ -515,6 +526,7 @@ class ArtesiaSimulator:
         pinned_message_ids: set[str],
     ) -> None:
         if required_bytes > self.config.cpu_capacity_bytes:
+            print("required data cannot fit in CPU memory")
             raise ArtesiaError(507, "required data cannot fit in CPU memory")
         messages_to_delete = self._plan_cpu_eviction_messages(
             required_bytes=required_bytes,
@@ -541,6 +553,7 @@ class ArtesiaSimulator:
                 freed_bytes += message.kv_bytes(self.config.kv_cache_bytes_per_token)
                 if freed_bytes >= overflow_bytes:
                     return planned_messages
+        print("unable to free enough GPU memory")
         raise ArtesiaError(507, "unable to free enough GPU memory")
 
     def _plan_cpu_eviction_messages(
@@ -568,6 +581,7 @@ class ArtesiaSimulator:
                 freed_bytes += message.kv_bytes(self.config.kv_cache_bytes_per_token)
                 if freed_bytes >= overflow_bytes:
                     return planned_messages
+        print("unable to free enough CPU memory")
         raise ArtesiaError(507, "unable to free enough CPU memory")
 
     def _ordered_offload_contexts(self, pinned_message_ids: set[str]) -> List[ContextState]:
@@ -648,14 +662,18 @@ class ArtesiaSimulator:
         message: StoredMessage,
     ) -> None:
         if message.placement != "cpu":
+            print("attempted to delete non-CPU message from CPU storage")
             raise ArtesiaError(500, "attempted to delete non-CPU message from CPU storage")
 
-        if message not in context.messages:
-            raise ArtesiaError(500, "attempted to delete a CPU message not owned by its context")
-
-        message_bytes = message.kv_bytes(self.config.kv_cache_bytes_per_token)
-        message.placement = "evicted"
-        self._cpu_bytes_used -= message_bytes
+        for index in range(len(context.messages) - 1, -1, -1):
+            if context.messages[index] is not message:
+                continue
+            message_bytes = message.kv_bytes(self.config.kv_cache_bytes_per_token)
+            del context.messages[index]
+            self._cpu_bytes_used -= message_bytes
+            return
+        print("attempted to delete a CPU message not owned by its context")
+        raise ArtesiaError(500, "attempted to delete a CPU message not owned by its context")
 
     def _release_message_storage(self, message: StoredMessage) -> None:
         message_bytes = message.kv_bytes(self.config.kv_cache_bytes_per_token)

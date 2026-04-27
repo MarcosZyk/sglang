@@ -16,21 +16,21 @@ METHOD_ORDER = [
     "result-enable-artesia-lru",
     "result-enable-artesia-mru",
     "result-disable-artesia-lru",
-    "result-disable-artesia-mru",
+    #"result-disable-artesia-mru",
 ]
 
 METHOD_LABELS = {
     "result-enable-artesia-lru": "enable-artesia-lru",
     "result-enable-artesia-mru": "enable-artesia-mru",
     "result-disable-artesia-lru": "disable-artesia-lru",
-    "result-disable-artesia-mru": "disable-artesia-mru",
+    #"result-disable-artesia-mru": "disable-artesia-mru",
 }
 
 METHOD_COLORS = {
     "result-enable-artesia-lru": "#1f77b4",
     "result-enable-artesia-mru": "#ff7f0e",
     "result-disable-artesia-lru": "#2ca02c",
-    "result-disable-artesia-mru": "#d62728",
+    #"result-disable-artesia-mru": "#d62728",
 }
 
 

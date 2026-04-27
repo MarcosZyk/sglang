@@ -180,7 +180,7 @@ class LoadGenerator:
     
     def __init__(self, server_url: str = "http://localhost:12306",
                  rps: float = 100.0, total_requests: int = 1000,
-                 timeout: float = 18000.0, warmup_requests: int = 0,
+                 timeout: float = 36000.0, warmup_requests: int = 0,
                  sim_config: Optional[SimRequest] = None):
         self.server_url = server_url
         self.rps = rps

@@ -552,7 +552,7 @@ def simulate_sync(req_dict: Dict) -> Dict:
         client = OpenAI(
             api_key="EMPTY",
             base_url=build_contextcake_openai_base_url(contextcake_base_url),
-            timeout=1800,
+            timeout=36000,
             max_retries=0,
         )
 
@@ -837,7 +837,7 @@ def run_server(
         access_log=False,
         limit_concurrency=500,
         backlog=2048,
-        timeout_keep_alive=1800,
+        timeout_keep_alive=18000,
     )
 
 

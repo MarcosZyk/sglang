@@ -71,7 +71,7 @@ class ContextCakeHttpClient:
                 method=method,
                 url=f"{self.base_url}{path}",
                 json=request_body,
-                timeout=30,
+                timeout=36000,
             )
             response.raise_for_status()
             return parse_http_response_body(response)
