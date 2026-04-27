@@ -162,6 +162,7 @@ async def test_cpu_eviction_deletes_tail_message_and_stops_when_enough() -> None
 
     assert offload_time == pytest.approx(0.001, rel=1e-6)
     assert context_roles_by_placement(runtime, "ctx-cpu", "cpu") == ["system"]
+    assert context_roles_by_placement(runtime, "ctx-cpu", "evicted") == ["user"]
     assert context_roles_by_placement(runtime, "ctx-offload", "cpu") == ["assistant"]
     assert runtime.cpu_bytes_used == 2 * runtime.config.kv_cache_bytes_per_token
 
@@ -192,6 +193,7 @@ async def test_cpu_eviction_prefers_suspend_context_when_artesia_enabled() -> No
     runtime._offload_message_to_cpu(gpu_message, pinned_message_ids=set())
 
     assert context_roles_by_placement(runtime, "ctx-suspend", "cpu") == []
+    assert context_roles_by_placement(runtime, "ctx-suspend", "evicted") == ["user"]
     assert context_roles_by_placement(runtime, "ctx-durable", "cpu") == ["system"]
 
 
@@ -224,6 +226,7 @@ async def test_cpu_eviction_ignores_state_when_artesia_disabled() -> None:
 
     assert context_roles_by_placement(runtime, "ctx-old", "cpu") == ["system"]
     assert context_roles_by_placement(runtime, "ctx-new", "cpu") == []
+    assert context_roles_by_placement(runtime, "ctx-new", "evicted") == ["user"]
 
 
 @pytest.mark.asyncio
@@ -260,6 +263,7 @@ async def test_cpu_eviction_skips_pinned_cpu_messages() -> None:
 
     assert context_roles_by_placement(runtime, "ctx-pinned", "cpu") == ["system"]
     assert context_roles_by_placement(runtime, "ctx-evictable", "cpu") == []
+    assert context_roles_by_placement(runtime, "ctx-evictable", "evicted") == ["user"]
 
 
 @pytest.mark.asyncio
@@ -275,6 +279,58 @@ async def test_cpu_eviction_raises_507_when_single_message_exceeds_cpu_capacity(
     with pytest.raises(ArtesiaError) as exc_info:
         runtime._offload_message_to_cpu(gpu_message, pinned_message_ids=set())
     assert exc_info.value.status_code == 507
+
+
+@pytest.mark.asyncio
+async def test_evicted_message_preserves_logical_length_and_stops_prefix_reuse() -> None:
+    runtime = build_runtime(
+        gpu_capacity_gb=0.00001,
+        cpu_capacity_gb=0.000001,
+        enable_artesia=True,
+    )
+    await runtime.create_context("ctx", "durable")
+    await runtime.create_context("ctx-offload", "durable")
+
+    await runtime.generate(
+        request_for(
+            "ctx",
+            [("system", "a"), ("user", "b")],
+            max_tokens=1,
+        )
+    )
+
+    tail_message = runtime.contexts["ctx"].messages[1]
+    runtime._offload_message_to_cpu(tail_message, pinned_message_ids=set())
+    gpu_message = add_stored_message(
+        runtime,
+        "ctx-offload",
+        role="assistant",
+        token_count=1,
+        placement="gpu",
+    )
+    runtime._offload_message_to_cpu(gpu_message, pinned_message_ids=set())
+
+    context = runtime.contexts["ctx"]
+    assert len(context.messages) == 2
+    assert [message.placement for message in context.messages] == ["gpu", "evicted"]
+
+    truncate_response = await runtime.truncate("ctx", 2)
+    assert truncate_response == {"status": "ok", "context_id": "ctx", "kept_messages": 2}
+
+    await runtime.one_off("ctx", 2)
+    completion = await runtime.generate(
+        request_for(
+            "ctx",
+            [("system", "a"), ("user", "b")],
+            max_tokens=1,
+        )
+    )
+
+    assert completion.num_local_cache == 1
+    assert completion.num_global_cache == 1
+    assert completion.usage.prompt_tokens == 1
+    assert len(runtime.contexts["ctx"].messages) == 2
+    assert all(message.placement == "gpu" for message in runtime.contexts["ctx"].messages)
 
 
 
@@ -627,6 +683,31 @@ async def test_non_artesia_truncate_archives_suffix_without_freeing_storage() ->
     assert [message.role for message in archived_context.messages] == ["user"]
     assert archived_context.state == context.state
     assert archived_context.state_changed_at_ns == timestamp_before
+
+
+@pytest.mark.asyncio
+async def test_non_artesia_truncate_preserves_evicted_suffix_in_archive() -> None:
+    runtime = build_runtime(gpu_capacity_gb=0.00002)
+    await runtime.create_context("ctx", "durable")
+    await runtime.generate(
+        request_for(
+            "ctx",
+            [("system", "a"), ("user", "b")],
+            max_tokens=1,
+        )
+    )
+
+    context = runtime.contexts["ctx"]
+    tail_message = context.messages[1]
+    runtime._offload_message_to_cpu(tail_message, pinned_message_ids=set())
+    runtime._delete_message_from_cpu(context, tail_message)
+
+    response = await runtime.truncate("ctx", 1)
+
+    assert response == {"status": "ok", "context_id": "ctx", "kept_messages": 1}
+    archived_context = next(iter(runtime._archived_contexts.values()))
+    assert [message.role for message in archived_context.messages] == ["user"]
+    assert [message.placement for message in archived_context.messages] == ["evicted"]
 
 
 @pytest.mark.asyncio

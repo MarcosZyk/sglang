@@ -15,7 +15,7 @@ except ImportError:
     from .models import ChatCompletionRequest, ChatCompletionResponse
 
 
-Placement = Literal["gpu", "cpu"]
+Placement = Literal["gpu", "cpu", "evicted"]
 MessageState = Literal["durable", "suspend"]
 
 
@@ -417,7 +417,10 @@ class ArtesiaSimulator:
         for index, token_count in enumerate(prompt_token_counts):
             if index >= len(stored_messages):
                 break
-            if stored_messages[index].token_count != token_count:
+            stored_message = stored_messages[index]
+            if stored_message.placement == "evicted":
+                break
+            if stored_message.token_count != token_count:
                 break
             matched += 1
         return matched
@@ -649,20 +652,18 @@ class ArtesiaSimulator:
         if message.placement != "cpu":
             raise ArtesiaError(500, "attempted to delete non-CPU message from CPU storage")
 
-        for index in range(len(context.messages) - 1, -1, -1):
-            if context.messages[index] is not message:
-                continue
-            message_bytes = message.kv_bytes(self.config.kv_cache_bytes_per_token)
-            del context.messages[index]
-            self._cpu_bytes_used -= message_bytes
-            return
-        raise ArtesiaError(500, "attempted to delete a CPU message not owned by its context")
+        if message not in context.messages:
+            raise ArtesiaError(500, "attempted to delete a CPU message not owned by its context")
+
+        message_bytes = message.kv_bytes(self.config.kv_cache_bytes_per_token)
+        message.placement = "evicted"
+        self._cpu_bytes_used -= message_bytes
 
     def _release_message_storage(self, message: StoredMessage) -> None:
         message_bytes = message.kv_bytes(self.config.kv_cache_bytes_per_token)
         if message.placement == "gpu":
             self._gpu_bytes_used -= message_bytes
-        else:
+        elif message.placement == "cpu":
             self._cpu_bytes_used -= message_bytes
 
     def _set_context_state(
