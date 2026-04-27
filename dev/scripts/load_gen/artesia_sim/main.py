@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from typing import Optional
 
 import uvicorn
@@ -25,11 +26,21 @@ except ImportError:
     from .runtime import ArtesiaError, ArtesiaSimulator, SimulatorConfig
 
 
+logger = logging.getLogger("artesia_sim")
+
+
 def create_app(simulator: Optional[ArtesiaSimulator] = None) -> FastAPI:
     app = FastAPI(title="Artesia Simulator")
     runtime = simulator or ArtesiaSimulator(SimulatorConfig())
 
-    def translate_error(error: ArtesiaError) -> HTTPException:
+    def translate_error(error: ArtesiaError, *, operation: str, **metadata: object) -> HTTPException:
+        logger.warning(
+            "ArtesiaError operation=%s status=%s detail=%s metadata=%s",
+            operation,
+            error.status_code,
+            error.detail,
+            metadata,
+        )
         return HTTPException(status_code=error.status_code, detail=error.detail)
 
     @app.put("/context/{context_id}")
@@ -37,7 +48,12 @@ def create_app(simulator: Optional[ArtesiaSimulator] = None) -> FastAPI:
         try:
             result = await runtime.create_context(context_id, request.context_type)
         except ArtesiaError as error:
-            raise translate_error(error) from error
+            raise translate_error(
+                error,
+                operation="create_context",
+                context_id=context_id,
+                context_type=request.context_type,
+            ) from error
         return JSONResponse(content=result)
 
     @app.delete("/context/{context_id}")
@@ -45,7 +61,11 @@ def create_app(simulator: Optional[ArtesiaSimulator] = None) -> FastAPI:
         try:
             result = await runtime.delete_context(context_id)
         except ArtesiaError as error:
-            raise translate_error(error) from error
+            raise translate_error(
+                error,
+                operation="delete_context",
+                context_id=context_id,
+            ) from error
         return JSONResponse(content=result)
 
     @app.post("/truncate")
@@ -53,7 +73,12 @@ def create_app(simulator: Optional[ArtesiaSimulator] = None) -> FastAPI:
         try:
             result = await runtime.truncate(request.context_id, request.msg_index)
         except ArtesiaError as error:
-            raise translate_error(error) from error
+            raise translate_error(
+                error,
+                operation="truncate",
+                context_id=request.context_id,
+                msg_index=request.msg_index,
+            ) from error
         return JSONResponse(content=result)
 
     @app.post("/one-off")
@@ -61,7 +86,12 @@ def create_app(simulator: Optional[ArtesiaSimulator] = None) -> FastAPI:
         try:
             result = await runtime.one_off(request.context_id, request.msg_index)
         except ArtesiaError as error:
-            raise translate_error(error) from error
+            raise translate_error(
+                error,
+                operation="one_off",
+                context_id=request.context_id,
+                msg_index=request.msg_index,
+            ) from error
         return JSONResponse(content=result)
 
     @app.post("/suspend")
@@ -69,7 +99,11 @@ def create_app(simulator: Optional[ArtesiaSimulator] = None) -> FastAPI:
         try:
             result = await runtime.suspend(request.context_id)
         except ArtesiaError as error:
-            raise translate_error(error) from error
+            raise translate_error(
+                error,
+                operation="suspend",
+                context_id=request.context_id,
+            ) from error
         return JSONResponse(content=result)
 
     @app.post("/v1/chat/completions")
@@ -77,7 +111,14 @@ def create_app(simulator: Optional[ArtesiaSimulator] = None) -> FastAPI:
         try:
             completion = await runtime.generate(request)
         except ArtesiaError as error:
-            raise translate_error(error) from error
+            raise translate_error(
+                error,
+                operation="chat_completions",
+                context_id=request.context_id,
+                model=request.model,
+                num_messages=len(request.messages),
+                max_tokens=request.max_tokens,
+            ) from error
         return JSONResponse(content=completion.model_dump())
 
     @app.get("/health")
