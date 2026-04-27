@@ -28,7 +28,8 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-dev/scripts/load_gen/result/*
+dev/scripts/load_gen/logs/
+dev/scripts/load_gen/result*/
 .codex
 
 # PyInstaller
