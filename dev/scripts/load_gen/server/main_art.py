@@ -61,7 +61,7 @@ SPECIAL_TASK_KEYWORDS = ["iFlow CLI"]
 # ========== 关键优化：线程池 ==========
 # 用于并发执行多个请求（每个请求内部保持顺序）
 request_executor = ThreadPoolExecutor(
-    max_workers=32,  # 根据 GPU 能力调整，支持 32 个并发请求
+    max_workers=38,  # 根据 GPU 能力调整，支持 32 个并发请求
     thread_name_prefix="request_worker"
 )
 
@@ -492,6 +492,7 @@ def simulate_sync(req_dict: Dict) -> Dict:
             "sum_decode_time",
             "num_local_cache_tokens",
             "num_global_cached_tokens",
+            "wait_time",
         ])
 
         # 从字典重建 SimRequest 对象
@@ -525,6 +526,9 @@ def simulate_sync(req_dict: Dict) -> Dict:
             s_list = req.s_list
         else:
             raise HTTPException(status_code=400, detail="s_list length must equal n")
+
+        if req.wait_time is not None and len(req.wait_time) != n:
+            raise HTTPException(status_code=400, detail="wait_time length must equal n")
 
         a_list = req.a_list
         b_list = req.b_list
@@ -711,6 +715,7 @@ def simulate_sync(req_dict: Dict) -> Dict:
                 num_local_cache = getattr(completion, "num_local_cache", None)
                 num_global_cache = getattr(completion, "num_global_cache", None)
                 calculate_cached_tokens = int(np.sum(effective_b_row))
+                current_wait_time = float(req.wait_time[i]) if req.wait_time is not None else 0.0
 
                 write_result = [
                     context_cache_id,
@@ -722,11 +727,12 @@ def simulate_sync(req_dict: Dict) -> Dict:
                     sum_decode_time,
                     num_local_cache,
                     num_global_cache,
+                    current_wait_time,
                 ]
                 csv_writer.writerow(write_result)
 
-                if req.wait_time and req.wait_time[i] > 0:
-                    time.sleep(req.wait_time[i])
+                if current_wait_time > 0:
+                    time.sleep(current_wait_time)
 
                 logger.info(f"agent_id {agent_id}, round {i} Done!")
 
