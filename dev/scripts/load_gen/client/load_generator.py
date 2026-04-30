@@ -313,7 +313,7 @@ class LoadGenerator:
         except:
             pass
         
-        max_workers = min(100, max(38, int(self.rps * 2)))
+        max_workers = min(100, max(32, int(self.rps * 2)))
         logger.info(f"Using {max_workers} worker threads")
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:

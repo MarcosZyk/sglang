@@ -61,7 +61,7 @@ SPECIAL_TASK_KEYWORDS = ["iFlow CLI"]
 # ========== 关键优化：线程池 ==========
 # 用于并发执行多个请求（每个请求内部保持顺序）
 request_executor = ThreadPoolExecutor(
-    max_workers=38,  # 根据 GPU 能力调整，支持 32 个并发请求
+    max_workers=32,  # 根据 GPU 能力调整，支持 32 个并发请求
     thread_name_prefix="request_worker"
 )
 

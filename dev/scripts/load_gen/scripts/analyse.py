@@ -88,7 +88,7 @@ def aggregate_agent_csv(csv_path: Path) -> dict[str, float | str]:
 
     return {
         "agent_request_id": csv_path.name,
-        "prefill_total_time": prefill_total_time * 7,
+        "prefill_total_time": prefill_total_time,
         "decode_total_time": decode_total_time,
         "cache_hit_rate": cache_hit_rate,
     }

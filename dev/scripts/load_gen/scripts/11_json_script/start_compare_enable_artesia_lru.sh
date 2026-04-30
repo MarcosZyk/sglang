@@ -3,16 +3,16 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-METHOD_NAME="enable-artesia-mru"
-RESULT_BUCKET="result_128G_8"
+METHOD_NAME="enable-artesia-lru"
+RESULT_BUCKET="result_128G_11"
 
 PYTHON="/home/khfu/miniconda3/envs/sgl/bin/python"
 
-ARTESIA_PORT=50371
-SERVER_PORT=12321
-RESULT_DIR="$ROOT_DIR/${RESULT_BUCKET}/result-enable-artesia-mru"
+ARTESIA_PORT=50380
+SERVER_PORT=12330
+RESULT_DIR="$ROOT_DIR/${RESULT_BUCKET}/result-enable-artesia-lru"
 LOG_DIR="$ROOT_DIR/logs/$METHOD_NAME/$RESULT_BUCKET"
-JSON_FILE="$ROOT_DIR/output_json_flatten/test8.json"
+JSON_FILE="$ROOT_DIR/output_json_flatten/test11.json"
 
 CPU_GPU_BW_GBPS=5
 GPU_SGLANG_BW_GBPS=240
@@ -23,7 +23,7 @@ KV_CACHE_KB_PER_TOKEN=144
 GPU_CAPACITY_GB=128
 CPU_CAPACITY_GB=256
 TOKENIZER_NAME="Qwen/Qwen3-8B"
-CLIENT_RPS=0.045
+CLIENT_RPS=0.07
 CLIENT_REQUESTS=96
 CLIENT_URL="http://127.0.0.1:${SERVER_PORT}"
 ARTESIA_BASE_URL="http://127.0.0.1:${ARTESIA_PORT}"
@@ -58,7 +58,7 @@ ARTESIA_PID="$(
             --kv-cache-kb-per-token ${KV_CACHE_KB_PER_TOKEN} \
             --gpu-capacity-gb ${GPU_CAPACITY_GB} \
             --cpu-capacity-gb ${CPU_CAPACITY_GB} \
-            --eviction-policy mru \
+            --eviction-policy lru \
             --enable-artesia \
             --tokenizer ${TOKENIZER_NAME}"
 )"
