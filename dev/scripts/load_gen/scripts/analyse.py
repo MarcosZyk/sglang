@@ -23,7 +23,7 @@ OUTPUT_COLUMNS = [
 
 def parse_args() -> argparse.Namespace:
     script_dir = Path(__file__).resolve().parent
-    default_input_root = script_dir.parent / "result_128G_8"
+    default_input_root = script_dir.parent / "result_128G_11"
 
     parser = argparse.ArgumentParser(
         description="Aggregate agent-level timing and cache statistics from result folders.",
