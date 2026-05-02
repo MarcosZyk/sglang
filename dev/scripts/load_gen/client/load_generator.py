@@ -5,9 +5,10 @@ import time
 import threading
 import statistics
 import logging
+import random
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 from requests.adapters import HTTPAdapter
@@ -21,7 +22,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_PAYLOAD_JSON = PROJECT_ROOT / "output_json_flatten" / "test1.json"
+DEFAULT_PAYLOAD_JSON_A = PROJECT_ROOT / "output_json_flatten" / "test8.json"
+DEFAULT_PAYLOAD_JSON_B = PROJECT_ROOT / "output_json_flatten" / "test10.json"
+DEFAULT_PAYLOAD_JSON = DEFAULT_PAYLOAD_JSON_A
 
 # ---------- Pydantic 请求模型 ----------
 class SimRequest(BaseModel):
@@ -181,13 +184,34 @@ class LoadGenerator:
     def __init__(self, server_url: str = "http://localhost:12306",
                  rps: float = 100.0, total_requests: int = 1000,
                  timeout: float = 36000.0, warmup_requests: int = 0,
-                 sim_config: Optional[SimRequest] = None):
+                 sim_config: Optional[Dict] = None,
+                 sim_configs: Optional[List[Dict]] = None,
+                 payload_indices: Optional[List[int]] = None,
+                 payload_labels: Optional[List[str]] = None):
         self.server_url = server_url
         self.rps = rps
         self.total_requests = total_requests
         self.timeout = timeout
         self.warmup_requests = warmup_requests
-        self.sim_config = sim_config
+        if sim_configs is None:
+            if sim_config is None:
+                raise ValueError("sim_config or sim_configs is required")
+            sim_configs = [sim_config]
+        if not sim_configs:
+            raise ValueError("sim_configs must not be empty")
+        self.sim_configs = sim_configs
+        self.sim_config = sim_configs[0]
+        if payload_indices is None:
+            payload_indices = [0 for _ in range(total_requests)]
+        if len(payload_indices) != total_requests:
+            raise ValueError("payload_indices length must equal total_requests")
+        for payload_index in payload_indices:
+            if payload_index < 0 or payload_index >= len(sim_configs):
+                raise ValueError("payload_indices contains an invalid payload index")
+        self.payload_indices = payload_indices
+        self.payload_labels = payload_labels or [
+            f"payload-{payload_index}" for payload_index in range(len(sim_configs))
+        ]
         
         self.stats = LoadTestStats()
         self.stats.target_rps = rps
@@ -211,13 +235,19 @@ class LoadGenerator:
         session.mount("http://", adapter)
         session.mount("https://", adapter)
         return session
+
+    def _get_sim_config(self, request_id: int) -> Dict:
+        if not self.payload_indices:
+            return self.sim_configs[0]
+        payload_index = self.payload_indices[request_id % len(self.payload_indices)]
+        return self.sim_configs[payload_index]
     
     def _send_request(self, request_id: int) -> RequestResult:
         """发送单个 SimRequest（同步）"""
         start_time = time.perf_counter()
         
         # 生成 SimRequest 数据
-        sim_data = self.sim_config
+        sim_data = self._get_sim_config(request_id)
         
         try:
             response = self.session.post(
@@ -285,7 +315,24 @@ class LoadGenerator:
         """运行负载测试"""
         logger.info(f"Starting load test: {self.total_requests} requests at {self.rps} RPS")
         logger.info(f"Target server: {self.server_url}")
-        logger.info(f"SimRequest config: n={self.sim_config['n']}, n_task={self.sim_config['n_task']}")
+        if len(self.sim_configs) == 1:
+            logger.info(
+                f"SimRequest config: n={self.sim_config['n']}, n_task={self.sim_config['n_task']}"
+            )
+        else:
+            for payload_index, sim_config in enumerate(self.sim_configs):
+                label = (
+                    self.payload_labels[payload_index]
+                    if payload_index < len(self.payload_labels)
+                    else f"payload-{payload_index}"
+                )
+                logger.info(
+                    "SimRequest config %s: requests=%s, n=%s, n_task=%s",
+                    label,
+                    self.payload_indices.count(payload_index),
+                    sim_config["n"],
+                    sim_config["n_task"],
+                )
         
         self.stats = LoadTestStats()
         self.stats.target_rps = self.rps
@@ -297,7 +344,7 @@ class LoadGenerator:
             logger.info(f"Warming up with {self.warmup_requests} requests...")
             for i in range(self.warmup_requests):
                 try:
-                    sim_data = self.sim_config
+                    sim_data = self._get_sim_config(i)
                     self.session.post(
                         f"{self.server_url}/api/process",
                         json=sim_data,
@@ -383,10 +430,13 @@ class LoadGenerator:
         print("=" * 70 + "\n")
 
 
-def resolve_payload_json(json_file: Optional[str] = None) -> Path:
+def resolve_payload_json(
+    json_file: Optional[str] = None,
+    default_path: Path = DEFAULT_PAYLOAD_JSON,
+) -> Path:
     """Resolve replay JSON path from CLI input or fall back to the default file."""
     if json_file is None:
-        resolved_path = DEFAULT_PAYLOAD_JSON
+        resolved_path = default_path
     else:
         input_path = Path(json_file).expanduser()
         if input_path.is_absolute():
@@ -404,19 +454,97 @@ def resolve_payload_json(json_file: Optional[str] = None) -> Path:
     return resolved_path
 
 
+def parse_json_ratio(json_ratio: str) -> Tuple[float, float]:
+    parts = json_ratio.split(":")
+    if len(parts) != 2:
+        raise ValueError("json-ratio must use A:B format")
+    try:
+        weights = (float(parts[0]), float(parts[1]))
+    except ValueError as exc:
+        raise ValueError("json-ratio values must be numeric") from exc
+    if weights[0] <= 0 or weights[1] <= 0:
+        raise ValueError("json-ratio values must be positive")
+    return weights
+
+
+def allocate_payload_counts(total_requests: int, weights: Tuple[float, float]) -> List[int]:
+    if total_requests < 0:
+        raise ValueError("total_requests must be >= 0")
+    total_weight = weights[0] + weights[1]
+    raw_counts = [total_requests * weight / total_weight for weight in weights]
+    counts = [int(raw_count) for raw_count in raw_counts]
+    remaining = total_requests - sum(counts)
+    remainders = [
+        (raw_counts[index] - counts[index], index)
+        for index in range(len(counts))
+    ]
+    for _, index in sorted(remainders, key=lambda item: (-item[0], item[1]))[:remaining]:
+        counts[index] += 1
+    return counts
+
+
+def build_payload_indices(
+    total_requests: int,
+    json_ratio: str,
+    trace_seed: int,
+) -> Tuple[List[int], List[int]]:
+    weights = parse_json_ratio(json_ratio)
+    counts = allocate_payload_counts(total_requests, weights)
+    payload_indices: List[int] = []
+    for payload_index, count in enumerate(counts):
+        payload_indices.extend([payload_index] * count)
+    rng = random.Random(trace_seed)
+    rng.shuffle(payload_indices)
+    return payload_indices, counts
+
+
 def run_client(server_url: str = "http://localhost:12306",
                rps: float = 100.0, total_requests: int = 1000,
-               model_name: str = None, json_file: Optional[str] = None):
+               model_name: str = None, json_file: Optional[str] = None,
+               json_file_a: Optional[str] = None,
+               json_file_b: Optional[str] = None,
+               json_ratio: str = "1:1",
+               trace_seed: int = 0):
     """运行客户端负载测试"""
-    payload_json = resolve_payload_json(json_file)
-    logger.info("Using replay JSON: %s", payload_json)
-    sim_config = read_replay_data(str(payload_json), model_name)
-    generator = LoadGenerator(
-        server_url=server_url,
-        rps=rps,
-        total_requests=total_requests,
-        sim_config=sim_config
-    )
+    if json_file is not None:
+        payload_json = resolve_payload_json(json_file)
+        logger.info("Using replay JSON: %s", payload_json)
+        sim_config = read_replay_data(str(payload_json), model_name)
+        generator = LoadGenerator(
+            server_url=server_url,
+            rps=rps,
+            total_requests=total_requests,
+            sim_config=sim_config,
+        )
+    else:
+        payload_json_a = resolve_payload_json(json_file_a, DEFAULT_PAYLOAD_JSON_A)
+        payload_json_b = resolve_payload_json(json_file_b, DEFAULT_PAYLOAD_JSON_B)
+        payload_indices, payload_counts = build_payload_indices(
+            total_requests=total_requests,
+            json_ratio=json_ratio,
+            trace_seed=trace_seed,
+        )
+        logger.info(
+            "Using mixed replay JSONs: %s (%s requests), %s (%s requests), ratio=%s, seed=%s",
+            payload_json_a,
+            payload_counts[0],
+            payload_json_b,
+            payload_counts[1],
+            json_ratio,
+            trace_seed,
+        )
+        sim_configs = [
+            read_replay_data(str(payload_json_a), model_name),
+            read_replay_data(str(payload_json_b), model_name),
+        ]
+        generator = LoadGenerator(
+            server_url=server_url,
+            rps=rps,
+            total_requests=total_requests,
+            sim_configs=sim_configs,
+            payload_indices=payload_indices,
+            payload_labels=[str(payload_json_a), str(payload_json_b)],
+        )
     stats = generator.run()
     generator.print_report()
     return stats
@@ -434,7 +562,28 @@ if __name__ == "__main__":
     parser.add_argument(
         "--json-file",
         default=None,
-        help=f"Replay JSON file path (default: {DEFAULT_PAYLOAD_JSON})",
+        help="Legacy single replay JSON file path. If set, disables mixed replay mode.",
+    )
+    parser.add_argument(
+        "--json-file-a",
+        default=None,
+        help=f"First mixed replay JSON file path (default: {DEFAULT_PAYLOAD_JSON_A})",
+    )
+    parser.add_argument(
+        "--json-file-b",
+        default=None,
+        help=f"Second mixed replay JSON file path (default: {DEFAULT_PAYLOAD_JSON_B})",
+    )
+    parser.add_argument(
+        "--json-ratio",
+        default="1:1",
+        help="Mixed replay ratio in A:B format (default: 1:1)",
+    )
+    parser.add_argument(
+        "--trace-seed",
+        type=int,
+        default=0,
+        help="Seed used to shuffle the mixed replay selection sequence",
     )
     args = parser.parse_args()
     run_client(
@@ -443,4 +592,8 @@ if __name__ == "__main__":
         total_requests=args.requests,
         model_name=args.model,
         json_file=args.json_file,
+        json_file_a=args.json_file_a,
+        json_file_b=args.json_file_b,
+        json_ratio=args.json_ratio,
+        trace_seed=args.trace_seed,
     )
