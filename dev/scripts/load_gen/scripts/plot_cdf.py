@@ -11,6 +11,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 RESULT_DIR = '../result_128G_9'
+SINGLE_FIGSIZE = (5.8, 3.2)
+SUBPLOT_WIDTH = 4.2
+SUBPLOT_HEIGHT = 2.6
 
 METHOD_ORDER = [
     "result-enable-artesia-lru",
@@ -88,6 +91,7 @@ def empirical_cdf(values: list[float]) -> tuple[list[float], list[float]]:
 def interpolated_cdf_curve(
     values: list[float],
     interpolation_points: int = 400,
+    smooth: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     x_values, y_values = empirical_cdf(values)
     if not x_values:
@@ -105,9 +109,37 @@ def interpolated_cdf_curve(
     if len(unique_x) == 1:
         return np.array(unique_x), np.array(unique_y)
 
+    if smooth:
+        return smooth_cdf_curve(unique_x, unique_y, interpolation_points)
+
     dense_x = np.linspace(unique_x[0], unique_x[-1], interpolation_points)
     dense_y = np.interp(dense_x, unique_x, unique_y)
     return dense_x, dense_y
+
+
+def smooth_cdf_curve(
+    x_values: list[float],
+    y_values: list[float],
+    interpolation_points: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    segment_count = len(x_values) - 1
+    points_per_segment = max(4, interpolation_points // segment_count)
+    dense_x_parts = []
+    dense_y_parts = []
+
+    for index in range(segment_count):
+        x_start = x_values[index]
+        x_end = x_values[index + 1]
+        y_start = y_values[index]
+        y_end = y_values[index + 1]
+        t_values = np.linspace(0.0, 1.0, points_per_segment)
+        if index > 0:
+            t_values = t_values[1:]
+        smooth_t = t_values * t_values * (3.0 - 2.0 * t_values)
+        dense_x_parts.append(x_start + (x_end - x_start) * t_values)
+        dense_y_parts.append(y_start + (y_end - y_start) * smooth_t)
+
+    return np.concatenate(dense_x_parts), np.concatenate(dense_y_parts)
 
 
 def method_sort_key(path: Path) -> tuple[int, str]:
@@ -117,8 +149,17 @@ def method_sort_key(path: Path) -> tuple[int, str]:
     return (len(METHOD_ORDER), stem)
 
 
-def plot_values(ax, method_name: str, values: list[float]) -> bool:
-    x_values, y_values = interpolated_cdf_curve(values)
+def plot_values(
+    ax,
+    method_name: str,
+    values: list[float],
+    smooth_curve: bool = False,
+) -> bool:
+    x_values, y_values = interpolated_cdf_curve(
+        values,
+        interpolation_points=800 if smooth_curve else 400,
+        smooth=smooth_curve,
+    )
     if len(x_values) == 0:
         return False
     ax.plot(
@@ -126,13 +167,15 @@ def plot_values(ax, method_name: str, values: list[float]) -> bool:
         y_values,
         label=METHOD_LABELS.get(method_name, method_name),
         color=METHOD_COLORS.get(method_name),
-        linewidth=2.0,
+        linewidth=2.2 if smooth_curve else 2.0,
+        solid_capstyle="round",
+        solid_joinstyle="round",
+        antialiased=True,
     )
     return True
 
 
-def style_metric_axis(ax, metric_title: str, x_label: str) -> None:
-    ax.set_title(metric_title)
+def style_metric_axis(ax, x_label: str) -> None:
     ax.set_xlabel(x_label)
     ax.set_ylabel("CDF")
     ax.set_xlim(left=0.0)
@@ -142,22 +185,22 @@ def style_metric_axis(ax, metric_title: str, x_label: str) -> None:
 
 def plot_metric(
     metric_key: str,
-    metric_title: str,
     x_label: str,
     summary_files: list[Path],
     output_path: Path,
+    smooth_curve: bool = False,
 ) -> None:
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = plt.subplots(figsize=SINGLE_FIGSIZE)
 
     for summary_csv in summary_files:
         method_name = summary_csv.stem
         rows = load_summary_rows(summary_csv)
         values = [float(row[metric_key]) for row in rows]
-        plot_values(ax, method_name, values)
+        plot_values(ax, method_name, values, smooth_curve=smooth_curve)
 
-    style_metric_axis(ax, metric_title, x_label)
+    style_metric_axis(ax, x_label)
     ax.legend()
-    fig.tight_layout()
+    plt.tight_layout(pad=0.8)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=200)
     plt.close(fig)
@@ -165,7 +208,6 @@ def plot_metric(
 
 def plot_metric_by_decode_time(
     metric_key: str,
-    metric_title: str,
     x_label: str,
     summary_files: list[Path],
     output_path: Path,
@@ -187,8 +229,8 @@ def plot_metric_by_decode_time(
     num_plots = len(decode_times)
     ncols = 1 if num_plots == 1 else min(3, num_plots)
     nrows = (num_plots + ncols - 1) // ncols
-    fig_width = 8 if num_plots == 1 else 6 * ncols
-    fig_height = 5 if num_plots == 1 else 4.5 * nrows
+    fig_width = SINGLE_FIGSIZE[0] if num_plots == 1 else SUBPLOT_WIDTH * ncols
+    fig_height = SINGLE_FIGSIZE[1] if num_plots == 1 else SUBPLOT_HEIGHT * nrows
     fig, axes = plt.subplots(
         nrows,
         ncols,
@@ -206,17 +248,22 @@ def plot_metric_by_decode_time(
                 if float(row["decode_total_time"]) == decode_time
             ]
             plot_values(ax, method_name, values)
-        style_metric_axis(
-            ax,
-            f"{metric_title}\nDecode Time = {decode_time:.6g}s",
-            x_label,
+        style_metric_axis(ax, x_label)
+        ax.text(
+            0.03,
+            0.95,
+            f"decode={decode_time:.6g}s",
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=8.5,
         )
         ax.legend()
 
     for ax in flat_axes[num_plots:]:
         ax.axis("off")
 
-    fig.tight_layout()
+    plt.tight_layout(pad=0.8)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=200)
     plt.close(fig)
@@ -238,31 +285,29 @@ def main() -> int:
 
     plot_metric_by_decode_time(
         metric_key="prefill_total_time",
-        metric_title="CDF of Total Prefill Time",
         x_label="Prefill Total Time (s)",
         summary_files=summary_files,
         output_path=output_root / "prefill_total_time_cdf.png",
     )
     plot_metric_by_decode_time(
         metric_key="end_to_end_time",
-        metric_title="CDF of End-to-End Time",
         x_label="End-to-End Time (s)",
         summary_files=summary_files,
         output_path=output_root / "end_to_end_time_cdf.png",
     )
     plot_metric(
         metric_key="local_cache_ratio",
-        metric_title="CDF of Local Cache Ratio",
         x_label="Local Cache Ratio",
         summary_files=summary_files,
         output_path=output_root / "local_cache_ratio_cdf.png",
+        smooth_curve=True,
     )
     plot_metric(
         metric_key="global_cache_ratio",
-        metric_title="CDF of Global Cache Ratio",
         x_label="Global Cache Ratio",
         summary_files=summary_files,
         output_path=output_root / "global_cache_ratio_cdf.png",
+        smooth_curve=True,
     )
 
     print(f"processed {len(summary_files)} summary files from {summary_root}")
