@@ -9,6 +9,7 @@ from typing import Iterable
 REQUIRED_COLUMNS = {
     "prefill_time",
     "sum_decode_time",
+    "theoretical_cached_tokens",
     "num_local_cache_tokens",
     "num_global_cached_tokens",
 }
@@ -17,7 +18,8 @@ OUTPUT_COLUMNS = [
     "agent_request_id",
     "prefill_total_time",
     "decode_total_time",
-    "cache_hit_rate",
+    "local_cache_ratio",
+    "global_cache_ratio",
 ]
 
 
@@ -39,6 +41,12 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Directory to write per-folder summary CSVs. Defaults to <input-root>/summary.",
+    )
+    parser.add_argument(
+        "--system-prompt-len",
+        type=int,
+        default=8000,
+        help="System prompt length to add when cache tokens are 0 but theoretical cached tokens are positive.",
     )
     return parser.parse_args()
 
@@ -66,11 +74,27 @@ def validate_required_columns(fieldnames: list[str] | None, csv_path: Path) -> N
         raise ValueError(f"{csv_path} is missing required columns: {', '.join(missing)}")
 
 
-def aggregate_agent_csv(csv_path: Path) -> dict[str, float | str]:
+def adjusted_cache_tokens(
+    cache_tokens: int,
+    theoretical_cached_tokens: int,
+    system_prompt_len: int,
+) -> int:
+    if theoretical_cached_tokens <= 0:
+        return 0
+    if cache_tokens == 0:
+        cache_tokens = system_prompt_len
+    return min(cache_tokens, theoretical_cached_tokens)
+
+
+def aggregate_agent_csv(
+    csv_path: Path,
+    system_prompt_len: int,
+) -> dict[str, float | str]:
     prefill_total_time = 0.0
     decode_total_time = 0.0
-    num_local_cache_tokens = 0
-    num_global_cached_tokens = 0
+    theoretical_cached_tokens_total = 0
+    num_local_cache_tokens_total = 0
+    num_global_cached_tokens_total = 0
 
     with csv_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -79,24 +103,50 @@ def aggregate_agent_csv(csv_path: Path) -> dict[str, float | str]:
         for row in reader:
             prefill_total_time += float(row["prefill_time"])
             decode_total_time += float(row["sum_decode_time"])
-            num_local_cache_tokens += int(row["num_local_cache_tokens"])
-            num_global_cached_tokens += int(row["num_global_cached_tokens"])
+            theoretical_cached_tokens = int(row["theoretical_cached_tokens"])
+            num_local_cache_tokens = int(row["num_local_cache_tokens"])
+            num_global_cached_tokens = int(row["num_global_cached_tokens"])
 
-    cache_hit_rate = 0.0
-    if num_global_cached_tokens > 0:
-        cache_hit_rate = num_local_cache_tokens / num_global_cached_tokens
+            theoretical_cached_tokens_total += theoretical_cached_tokens
+            num_local_cache_tokens_total += adjusted_cache_tokens(
+                num_local_cache_tokens,
+                theoretical_cached_tokens,
+                system_prompt_len,
+            )
+            num_global_cached_tokens_total += adjusted_cache_tokens(
+                num_global_cached_tokens,
+                theoretical_cached_tokens,
+                system_prompt_len,
+            )
+
+    local_cache_ratio = 0.0
+    global_cache_ratio = 0.0
+    if theoretical_cached_tokens_total > 0:
+        local_cache_ratio = min(
+            num_local_cache_tokens_total / theoretical_cached_tokens_total,
+            1.0,
+        )
+        global_cache_ratio = min(
+            num_global_cached_tokens_total / theoretical_cached_tokens_total,
+            1.0,
+        )
 
     return {
         "agent_request_id": csv_path.name,
         "prefill_total_time": prefill_total_time,
         "decode_total_time": decode_total_time,
-        "cache_hit_rate": cache_hit_rate,
+        "local_cache_ratio": local_cache_ratio,
+        "global_cache_ratio": global_cache_ratio,
     }
 
 
-def write_summary_csv(result_folder: Path, output_csv: Path) -> int:
+def write_summary_csv(
+    result_folder: Path,
+    output_csv: Path,
+    system_prompt_len: int,
+) -> int:
     rows = [
-        aggregate_agent_csv(csv_path)
+        aggregate_agent_csv(csv_path, system_prompt_len)
         for csv_path in sorted(result_folder.glob("*.csv"), key=numeric_filename_sort_key)
     ]
     if not rows:
@@ -123,7 +173,11 @@ def main() -> int:
     processed_any = False
     for result_folder in iter_result_folders(input_root, output_root):
         output_csv = output_root / f"{result_folder.name}.csv"
-        row_count = write_summary_csv(result_folder, output_csv)
+        row_count = write_summary_csv(
+            result_folder,
+            output_csv,
+            args.system_prompt_len,
+        )
         if row_count == 0:
             print(f"skip {result_folder}: no agent csv files found")
             continue

@@ -69,7 +69,8 @@ def load_summary_rows(summary_csv: Path) -> list[dict[str, float | str]]:
                     "prefill_total_time": prefill_total_time,
                     "decode_total_time": decode_total_time,
                     "end_to_end_time": prefill_total_time + decode_total_time,
-                    "cache_hit_rate": float(row["cache_hit_rate"]),
+                    "local_cache_ratio": float(row["local_cache_ratio"]),
+                    "global_cache_ratio": float(row["global_cache_ratio"]),
                 }
             )
     return rows
@@ -116,6 +117,29 @@ def method_sort_key(path: Path) -> tuple[int, str]:
     return (len(METHOD_ORDER), stem)
 
 
+def plot_values(ax, method_name: str, values: list[float]) -> bool:
+    x_values, y_values = interpolated_cdf_curve(values)
+    if len(x_values) == 0:
+        return False
+    ax.plot(
+        x_values,
+        y_values,
+        label=METHOD_LABELS.get(method_name, method_name),
+        color=METHOD_COLORS.get(method_name),
+        linewidth=2.0,
+    )
+    return True
+
+
+def style_metric_axis(ax, metric_title: str, x_label: str) -> None:
+    ax.set_title(metric_title)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel("CDF")
+    ax.set_xlim(left=0.0)
+    ax.set_ylim(0.0, 1.0)
+    ax.grid(True, linestyle="--", alpha=0.4)
+
+
 def plot_metric(
     metric_key: str,
     metric_title: str,
@@ -129,24 +153,69 @@ def plot_metric(
         method_name = summary_csv.stem
         rows = load_summary_rows(summary_csv)
         values = [float(row[metric_key]) for row in rows]
-        x_values, y_values = interpolated_cdf_curve(values)
-        if len(x_values) == 0:
-            continue
-        ax.plot(
-            x_values,
-            y_values,
-            label=METHOD_LABELS.get(method_name, method_name),
-            color=METHOD_COLORS.get(method_name),
-            linewidth=2.0,
-        )
+        plot_values(ax, method_name, values)
 
-    ax.set_title(metric_title)
-    ax.set_xlabel(x_label)
-    ax.set_ylabel("CDF")
-    ax.set_xlim(left=0.0)
-    ax.set_ylim(0.0, 1.0)
-    ax.grid(True, linestyle="--", alpha=0.4)
+    style_metric_axis(ax, metric_title, x_label)
     ax.legend()
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)
+
+
+def plot_metric_by_decode_time(
+    metric_key: str,
+    metric_title: str,
+    x_label: str,
+    summary_files: list[Path],
+    output_path: Path,
+) -> None:
+    rows_by_method = [
+        (summary_csv.stem, load_summary_rows(summary_csv))
+        for summary_csv in summary_files
+    ]
+    decode_times = sorted(
+        {
+            float(row["decode_total_time"])
+            for _, rows in rows_by_method
+            for row in rows
+        }
+    )
+    if not decode_times:
+        return
+
+    num_plots = len(decode_times)
+    ncols = 1 if num_plots == 1 else min(3, num_plots)
+    nrows = (num_plots + ncols - 1) // ncols
+    fig_width = 8 if num_plots == 1 else 6 * ncols
+    fig_height = 5 if num_plots == 1 else 4.5 * nrows
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(fig_width, fig_height),
+        squeeze=False,
+        sharey=True,
+    )
+    flat_axes = axes.ravel()
+
+    for ax, decode_time in zip(flat_axes, decode_times):
+        for method_name, rows in rows_by_method:
+            values = [
+                float(row[metric_key])
+                for row in rows
+                if float(row["decode_total_time"]) == decode_time
+            ]
+            plot_values(ax, method_name, values)
+        style_metric_axis(
+            ax,
+            f"{metric_title}\nDecode Time = {decode_time:.6g}s",
+            x_label,
+        )
+        ax.legend()
+
+    for ax in flat_axes[num_plots:]:
+        ax.axis("off")
+
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=200)
@@ -167,14 +236,14 @@ def main() -> int:
     if not summary_files:
         raise FileNotFoundError(f"no summary csv files found under {summary_root}")
 
-    plot_metric(
+    plot_metric_by_decode_time(
         metric_key="prefill_total_time",
         metric_title="CDF of Total Prefill Time",
         x_label="Prefill Total Time (s)",
         summary_files=summary_files,
         output_path=output_root / "prefill_total_time_cdf.png",
     )
-    plot_metric(
+    plot_metric_by_decode_time(
         metric_key="end_to_end_time",
         metric_title="CDF of End-to-End Time",
         x_label="End-to-End Time (s)",
@@ -182,11 +251,18 @@ def main() -> int:
         output_path=output_root / "end_to_end_time_cdf.png",
     )
     plot_metric(
-        metric_key="cache_hit_rate",
-        metric_title="CDF of Cache Hit Rate",
-        x_label="Cache Hit Rate",
+        metric_key="local_cache_ratio",
+        metric_title="CDF of Local Cache Ratio",
+        x_label="Local Cache Ratio",
         summary_files=summary_files,
-        output_path=output_root / "cache_hit_rate_cdf.png",
+        output_path=output_root / "local_cache_ratio_cdf.png",
+    )
+    plot_metric(
+        metric_key="global_cache_ratio",
+        metric_title="CDF of Global Cache Ratio",
+        x_label="Global Cache Ratio",
+        summary_files=summary_files,
+        output_path=output_root / "global_cache_ratio_cdf.png",
     )
 
     print(f"processed {len(summary_files)} summary files from {summary_root}")
