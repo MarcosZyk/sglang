@@ -167,7 +167,7 @@ def plot_values(
         y_values,
         label=METHOD_LABELS.get(method_name, method_name),
         color=METHOD_COLORS.get(method_name),
-        linewidth=2.2 if smooth_curve else 2.0,
+        linewidth=1.4 if smooth_curve else 1.2,
         solid_capstyle="round",
         solid_joinstyle="round",
         antialiased=True,
@@ -249,15 +249,6 @@ def plot_metric_by_decode_time(
             ]
             plot_values(ax, method_name, values)
         style_metric_axis(ax, x_label)
-        ax.text(
-            0.03,
-            0.95,
-            f"decode={decode_time:.6g}s",
-            transform=ax.transAxes,
-            ha="left",
-            va="top",
-            fontsize=8.5,
-        )
         ax.legend()
 
     for ax in flat_axes[num_plots:]:
