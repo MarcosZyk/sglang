@@ -214,7 +214,7 @@ class ArtesiaRadixCache(RadixCache):
 
         req = kwargs.get("req")
         if req is not None:
-            req.load_kv_elapsed += load_kv_elapsed
+            req.load_kv_elapsed = load_kv_elapsed
 
         logger.info(f"Retrieve Time: {load_kv_elapsed}s")
 
@@ -284,7 +284,7 @@ class ArtesiaRadixCache(RadixCache):
         end_store = time.perf_counter()
         offload_kv_elapsed = end_store - start_store
 
-        req.offload_kv_elapsed += offload_kv_elapsed
+        req.offload_kv_elapsed = offload_kv_elapsed
 
         logger.info(f'Offload time is {offload_kv_elapsed}s')
         super().cache_finished_req(req)
