@@ -623,6 +623,8 @@ class Req:
 
         self.prefill_time: float = 0.0
         self.artesia_time: float = 0.0
+        self.load_kv_elapsed: float = 0.0
+        self.offload_kv_elapsed: float = 0.0
         self.decode_time: List[float] = []
 
         self.push_to_model_runner_time: Optional[Deque[float]] = deque()

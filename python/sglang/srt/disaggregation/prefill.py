@@ -284,6 +284,12 @@ class SchedulerDisaggregationPrefillMixin:
             
             self.cur_batch = batch
             if batch:
+                # Aggregate batch-level artesia load_kv time
+                batch_load_kv_total = sum(req.load_kv_elapsed for req in batch.reqs)
+                if batch_load_kv_total > 0:
+                    for req in batch.reqs:
+                        req.artesia_time += batch_load_kv_total
+
                 for num, _ in enumerate(batch.reqs):
                     batch.reqs[num].push_to_model_runner_time.append(self.start_exe_time)
                 result = self.run_batch(batch)
@@ -526,6 +532,13 @@ class SchedulerDisaggregationPrefillMixin:
                 done_reqs.append(req)
             else:
                 assert False, f"Unexpected polling state {poll=}"
+
+        # Aggregate batch-level artesia offload time for PD prefill path
+        batch_offload_total = sum(req.offload_kv_elapsed for req in done_reqs)
+        if batch_offload_total > 0:
+            for req in done_reqs:
+                req.artesia_time += batch_offload_total
+                req.prefill_time += batch_offload_total
 
         # Stream requests which have finished transfer
 

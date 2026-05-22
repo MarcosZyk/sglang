@@ -181,6 +181,17 @@ class SchedulerOutputProcessorMixin:
                             )
                             logprob_pt += num_input_logprobs
 
+            # Aggregate batch-level artesia offload time:
+            # all requests in this batch are blocked by the total offload time.
+            batch_offload_total = sum(
+                req.offload_kv_elapsed for req in batch.reqs if req.finished() and not req.is_retracted
+            )
+            if batch_offload_total > 0:
+                for req in batch.reqs:
+                    if req.finished() and not req.is_retracted:
+                        req.artesia_time += batch_offload_total
+                        req.prefill_time += batch_offload_total
+
             self.set_next_batch_sampling_info_done(batch)
 
         else:  # embedding or reward model
@@ -314,6 +325,16 @@ class SchedulerOutputProcessorMixin:
                     )
                     self.abort_request(AbortReq(req.rid))
                 req.grammar.finished = req.finished()
+
+        # Aggregate batch-level artesia offload time for decode path
+        batch_offload_total = sum(
+            req.offload_kv_elapsed for req in batch.reqs if req.finished() and not req.is_retracted
+        )
+        if batch_offload_total > 0:
+            for req in batch.reqs:
+                if req.finished() and not req.is_retracted:
+                    req.artesia_time += batch_offload_total
+                    req.prefill_time += batch_offload_total
 
         self.set_next_batch_sampling_info_done(batch)
         self.stream_output(batch.reqs, batch.return_logprob)
