@@ -622,6 +622,7 @@ class Req:
         self.metadata_buffer_index: int = -1
 
         self.prefill_time: float = 0.0
+        self.artesia_time: float = 0.0
         self.decode_time: List[float] = []
 
         self.push_to_model_runner_time: Optional[Deque[float]] = deque()
@@ -661,6 +662,7 @@ class Req:
                 key=self.adjust_max_prefix_ids(),
                 agent_id=self.agent_id,
                 task_id=self.task_id,
+                req=self,
             )
         self.extend_input_len = len(self.fill_ids) - len(self.prefix_indices)
 

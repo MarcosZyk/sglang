@@ -705,6 +705,7 @@ class OpenAIServingChat(OpenAIServingBase):
             choices=choices,
             usage=usage,
             prefill_time=ret[0]["meta_info"]["prefill_time"],
+            artesia_time=ret[0]["meta_info"]["artesia_time"],
             decode_time=ret[0]["meta_info"]["decode_time"],
             num_local_cache=ret[0]["meta_info"]["num_local_cache"],
             num_global_cache=ret[0]["meta_info"]["num_global_cache"]

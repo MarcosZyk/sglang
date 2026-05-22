@@ -699,6 +699,7 @@ class BatchTokenIDOut:
     output_hidden_states: List[List[float]]
 
     prefill_times: Optional[List[float]] = None
+    artesia_times: Optional[List[float]] = None
     decode_times: Optional[List[List[float]]] = None
     num_global_caches: Optional[List[int]] = None
     num_local_caches: Optional[List[int]] = None
@@ -751,6 +752,7 @@ class BatchStrOut:
     output_hidden_states: List[List[float]]
 
     prefill_times: Optional[List[float]] = None
+    artesia_times: Optional[List[float]] = None
     decode_times: Optional[List[List[float]]] = None
     num_global_caches: Optional[List[int]] = None
     num_local_caches: Optional[List[int]] = None

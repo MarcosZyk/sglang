@@ -210,8 +210,13 @@ class ArtesiaRadixCache(RadixCache):
 
         torch.cuda.synchronize()
         end_retrieve = time.perf_counter()
+        load_kv_elapsed = end_retrieve - start_retrieve
 
-        logger.info(f"Retrieve Time: {end_retrieve - start_retrieve}s")
+        req = kwargs.get("req")
+        if req is not None:
+            req.artesia_time += load_kv_elapsed
+
+        logger.info(f"Retrieve Time: {load_kv_elapsed}s")
 
         if num_retrieved > 0:
             prefix_pad = num_retrieved % self.page_size
@@ -277,8 +282,12 @@ class ArtesiaRadixCache(RadixCache):
         )
         torch.cuda.synchronize()
         end_store = time.perf_counter()
+        offload_kv_elapsed = end_store - start_store
 
-        logger.info(f'Offload time is {end_store - start_store}s')
+        req.artesia_time += offload_kv_elapsed
+        req.prefill_time += offload_kv_elapsed
+
+        logger.info(f'Offload time is {offload_kv_elapsed}s')
         super().cache_finished_req(req)
 
 

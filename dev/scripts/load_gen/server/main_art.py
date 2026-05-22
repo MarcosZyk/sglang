@@ -489,6 +489,7 @@ def simulate_sync(req_dict: Dict) -> Dict:
             "theoretical_cached_tokens",
             "num_cached_tokens",
             "prefill_time",
+            "artesia_time",
             "sum_decode_time",
             "num_local_cache_tokens",
             "num_global_cached_tokens",
@@ -712,6 +713,7 @@ def simulate_sync(req_dict: Dict) -> Dict:
                 sum_decode_time = get_decode_time_stats(completion)
                 
                 prefill_time = getattr(completion, "prefill_time", None)
+                artesia_time = getattr(completion, "artesia_time", None)
                 num_local_cache = getattr(completion, "num_local_cache", None)
                 num_global_cache = getattr(completion, "num_global_cache", None)
                 calculate_cached_tokens = int(np.sum(effective_b_row))
@@ -724,6 +726,7 @@ def simulate_sync(req_dict: Dict) -> Dict:
                     calculate_cached_tokens,
                     cached_tokens,
                     prefill_time,
+                    artesia_time,
                     sum_decode_time,
                     num_local_cache,
                     num_global_cache,

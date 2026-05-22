@@ -231,6 +231,7 @@ class CompletionResponse(BaseModel):
     choices: List[CompletionResponseChoice]
     usage: UsageInfo
     prefill_time: float = 0.0
+    artesia_time: float = 0.0
     decode_time: float = 0.0
     num_local_cache: int = 0
     num_global_cache: int = 0
@@ -507,6 +508,7 @@ class ChatCompletionResponse(BaseModel):
     choices: List[ChatCompletionResponseChoice]
     usage: UsageInfo
     prefill_time: float
+    artesia_time: float
     decode_time: List[float]
     num_local_cache: int
     num_global_cache: int
