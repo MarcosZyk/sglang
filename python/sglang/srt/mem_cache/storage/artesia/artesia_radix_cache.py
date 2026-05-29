@@ -18,6 +18,7 @@ try:
         ModelDescription,
         ContextDescription,
         SemanticDescription,
+        TPDescription,
     )
 except ImportError as e:
     raise RuntimeError(
@@ -121,11 +122,19 @@ class ArtesiaRadixCache(RadixCache):
         )
         self.kv_pool = [self.k_pool, self.v_pool]
 
+        tp_head_num = kvcache.head_num
+        self.tp_description = TPDescription(
+            rank=rank,
+            head_start=rank * tp_head_num,
+            head_end=(rank + 1) * tp_head_num,
+        )
         self.model_description = ModelDescription(
-            model_name=f"{model_config.model_path}-{rank}",
+            model_name=model_config.model_path,
             dtype=kvcache.store_dtype,
             layer_num=kvcache.layer_num,
-            kv_shape=torch.Size([2, kvcache.head_num, kvcache.head_dim]),
+            kv_shape=torch.Size([2, tp_head_num * tp_size, kvcache.head_dim]),
+            tp_size=tp_size,
+            tp_head_num=tp_head_num,
         )
 
         device = self.k_pool[0].device
@@ -206,6 +215,7 @@ class ArtesiaRadixCache(RadixCache):
             context=context,
             semantics=semantics,
             kv_indices=torch.cat([value, token_slots]),
+            tp_description=self.tp_description,
         )
 
         torch.cuda.synchronize()
@@ -279,6 +289,7 @@ class ArtesiaRadixCache(RadixCache):
             semantics=semantics,
             kv_indices=kv_indices,
             call_id=getattr(req, "call_id", None),
+            tp_description=self.tp_description,
         )
         torch.cuda.synchronize()
         end_store = time.perf_counter()
