@@ -150,7 +150,7 @@ class LoadTestStats:
 class TokenBucket:
     """令牌桶 - 精确控制请求速率"""
     
-    def __init__(self, rate: float, capacity: Optional[int] = 32):
+    def __init__(self, rate: float, capacity: Optional[int] = 1):
         self.rate = rate
         self.capacity = capacity if capacity else int(rate)
         self.tokens = float(self.capacity)
@@ -299,7 +299,7 @@ class LoadGenerator:
     
     def _worker(self, request_id: int):
         """工作线程"""
-        #self.token_bucket.acquire()
+        self.token_bucket.acquire()
         result = self._send_request(request_id)
         
         with self._results_lock:
@@ -558,7 +558,11 @@ if __name__ == "__main__":
     parser.add_argument("--requests", type=int, default=1000, help="Total requests")
     parser.add_argument("--sim-n", type=int, default=10, help="SimRequest n value")
     parser.add_argument("--sim-n-task", type=int, default=3, help="SimRequest n_task value")
-    parser.add_argument('--model', default='Qwen/Qwen3-8B', type=str)
+    parser.add_argument(
+        '--model',
+        default='/artesia-workspace/models/Qwen3-32B',
+        type=str,
+    )
     parser.add_argument(
         "--json-file",
         default=None,
