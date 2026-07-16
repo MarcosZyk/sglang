@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/common_env.sh"
+
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}" \
 MC_GID_INDEX="${MC_GID_INDEX:-3}" \
 MC_TE_METRIC="${MC_TE_METRIC:-true}" \
 SGLANG_MOONCAKE_TRANS_THREAD="${SGLANG_MOONCAKE_TRANS_THREAD:-16}" \
-python -m sglang.launch_server \
+"${SGLANG_PYTHON}" -m sglang.launch_server \
     --model-path "${MODEL_PATH:-/artesia-workspace/models/GLM-4.7}" \
     --host "${HOST:-0.0.0.0}" \
     --port "${PORT:-30000}" \

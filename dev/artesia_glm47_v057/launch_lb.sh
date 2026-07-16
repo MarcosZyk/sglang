@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-python -m sglang.srt.disaggregation.mini_lb \
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/common_env.sh"
+
+"${SGLANG_PYTHON}" -m sglang.srt.disaggregation.mini_lb \
     --prefill "${PREFILL_URL:-http://10.87.79.111:30000}" \
     --decode \
     "${DECODE_URL_1:-http://10.87.79.112:30000}" \
