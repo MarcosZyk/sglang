@@ -16,7 +16,7 @@ Options:
     --proto-file    Specify proto file (default: sglang_scheduler.proto)
 
 ### Install Dependencies
-pip install "grpcio==1.75.1" "grpcio-tools==1.75.1"
+pip install "grpcio==1.76.0" "grpcio-tools==1.76.0"
 
 Please make sure to use the same version of grpcio and grpcio-tools specified in pyproject.toml
 otherwise update the versions specified in pyproject.toml
@@ -33,7 +33,7 @@ import sys
 from importlib.metadata import version
 from pathlib import Path
 
-GRPC_VERSION = "1.75.1"
+GRPC_VERSION = "1.76.0"
 
 
 def get_file_mtime(path: Path) -> float:

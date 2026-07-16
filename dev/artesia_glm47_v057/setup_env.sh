@@ -47,15 +47,32 @@ UV_INSTALL=(
 # dependency. v0.3.8 is the version used by the v0.5.7 CI environment.
 "${UV_INSTALL[@]}" \
     mooncake-transfer-engine==0.3.8 \
+    grpcio==1.76.0 \
+    grpcio-tools==1.76.0 \
+    grpcio-reflection==1.76.0 \
+    grpcio-health-checking==1.76.0 \
+    "protobuf>=6.31.1,<7" \
+    humanfriendly \
     matplotlib \
     pytest \
     pytest-asyncio
 
-# Install the Python client normally and rebuild the C++/CUDA extension against
-# the Torch version in this venv. Do not use editable mode for the kernel:
-# editable builds would overwrite the .so files used by the legacy environment.
-"${UV_INSTALL[@]}" "${ARTESIA_ROOT}/python"
-"${UV_INSTALL[@]}" -e "${ARTESIA_ROOT}/context-cake"
+# Build the Artesia Python client from a temporary source copy. Its build step
+# regenerates protobuf bindings; using a copy avoids modifying the Artesia Git
+# worktree and guarantees generation with this venv's stable grpcio-tools.
+ARTESIA_PYTHON_BUILD_DIR="$(mktemp -d)"
+trap 'rm -rf "${ARTESIA_PYTHON_BUILD_DIR}"' EXIT
+cp -a "${ARTESIA_ROOT}/python/." "${ARTESIA_PYTHON_BUILD_DIR}/"
+"${UV_INSTALL[@]}" \
+    --no-build-isolation \
+    --force-reinstall \
+    --no-deps \
+    "${ARTESIA_PYTHON_BUILD_DIR}"
+
+# Rebuild the C++/CUDA extension against the Torch version in this venv. Do
+# not use editable mode for the kernel: editable builds would overwrite the
+# .so files used by the legacy environment.
+"${UV_INSTALL[@]}" --no-deps -e "${ARTESIA_ROOT}/context-cake"
 TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" MAX_JOBS="${MAX_JOBS}" \
     "${UV_INSTALL[@]}" \
     --no-build-isolation \

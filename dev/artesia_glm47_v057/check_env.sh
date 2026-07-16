@@ -23,6 +23,8 @@ expected = {
     "flashinfer-python": "0.5.3",
     "mooncake-transfer-engine": "0.3.8",
     "context-cake": "0.2.0",
+    "grpcio": "1.76.0",
+    "grpcio-tools": "1.76.0",
 }
 
 for package, expected_version in expected.items():
