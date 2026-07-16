@@ -10,4 +10,4 @@ source "${SCRIPT_DIR}/common_env.sh"
     "${DECODE_URL_1:-http://10.87.79.112:30000}" \
     "${DECODE_URL_2:-http://10.87.79.113:30000}" \
     --host "${HOST:-0.0.0.0}" \
-    --port "${PORT:-8000}"
+    --port "${PORT:-12347}"

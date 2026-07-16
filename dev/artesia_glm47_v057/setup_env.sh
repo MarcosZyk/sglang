@@ -45,7 +45,11 @@ UV_INSTALL=(
 
 # Mooncake is required by the PD transfer backend but is not a core SGLang
 # dependency. v0.3.8 is the version used by the v0.5.7 CI environment.
-"${UV_INSTALL[@]}" mooncake-transfer-engine==0.3.8
+"${UV_INSTALL[@]}" \
+    mooncake-transfer-engine==0.3.8 \
+    matplotlib \
+    pytest \
+    pytest-asyncio
 
 # Install the Python client normally and rebuild the C++/CUDA extension against
 # the Torch version in this venv. Do not use editable mode for the kernel:

@@ -1,0 +1,737 @@
+"""
+客户端负载生成器 - 按固定 RPS 发送 SimRequest 请求
+"""
+import time
+import threading
+import statistics
+import logging
+import random
+from pathlib import Path
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+from generate_payload import read_replay_data
+from pydantic import BaseModel
+import argparse
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_PAYLOAD_JSON_A = PROJECT_ROOT / "output_json_flatten" / "test8.json"
+DEFAULT_PAYLOAD_JSON_B = PROJECT_ROOT / "output_json_flatten" / "test10.json"
+DEFAULT_PAYLOAD_JSON = DEFAULT_PAYLOAD_JSON_A
+
+# ---------- Pydantic 请求模型 ----------
+class SimRequest(BaseModel):
+    n: int  # 总共调用次数
+    n_task: int  # 总共任务类型数
+    s_list: Optional[List[int]] = None  # 每轮生成的 token 数 s[i], 长度 n (可选)
+    m_list: Optional[List[int]] = None  # 每轮消息数 m[i], 长度 n (可选)
+    a_list: Optional[List[List[int]]] = None  # a[i][j] 每条 message 的 token 数（可选）
+    b_list: Optional[List[List[int]]] = None  # b[i][j] 与上一轮相同的 token 数（可选）
+    roles_list: Optional[List[List[str]]] = (
+        None  # roles_list[i][j] 指定每条 message 的 role（可选）
+    )
+    wait_time: Optional[List[float]] = (
+        None  # 每次任务调用时，其距离上一轮调用的等待时间 (可用于模拟tools调用)
+    )
+    task_list: Optional[List[int]] = None
+    tokenizer_name: Optional[str] = None
+    openai_model: Optional[str] = None
+    temperature: Optional[float] = 0.0
+    task_type_list: Optional[List[str]] = None
+    semantic_type_list: Optional[List[Optional[List[str]]]] = None
+    record_result: bool = True
+
+
+@dataclass
+class RequestResult:
+    """单次请求结果"""
+    request_id: int
+    status_code: int
+    response_time_ms: float
+    wait_time_ms: float
+    process_time_ms: float
+    was_queued: bool
+    total_tokens: int
+    total_messages: int
+    error: Optional[str] = None
+    timestamp: float = field(default_factory=lambda: time.time())
+
+
+@dataclass
+class LoadTestStats:
+    """负载测试统计"""
+    total_requests: int = 0
+    successful_requests: int = 0
+    failed_requests: int = 0
+    total_response_time_ms: float = 0.0
+    total_wait_time_ms: float = 0.0
+    total_tokens: int = 0
+    total_messages: int = 0
+    response_times: List[float] = field(default_factory=list)
+    wait_times: List[float] = field(default_factory=list)
+    status_codes: Dict[int, int] = field(default_factory=dict)
+    start_time: float = field(default_factory=lambda: time.time())
+    end_time: float = 0.0
+    target_rps: float = 0.0
+    actual_rps: float = 0.0
+    server_accepted_rps: float = 0.0
+    p50_response: float = 0.0
+    p95_response: float = 0.0
+    p99_response: float = 0.0
+    
+    def add_result(self, result: RequestResult):
+        """添加请求结果"""
+        self.total_requests += 1
+        if result.status_code == 200:
+            self.successful_requests += 1
+        else:
+            self.failed_requests += 1
+        
+        self.total_response_time_ms += result.response_time_ms
+        self.total_wait_time_ms += result.wait_time_ms
+        self.total_tokens += result.total_tokens
+        self.total_messages += result.total_messages
+        self.response_times.append(result.response_time_ms)
+        self.wait_times.append(result.wait_time_ms)
+        
+        self.status_codes[result.status_code] = \
+            self.status_codes.get(result.status_code, 0) + 1
+    
+    def calculate_metrics(self):
+        """计算最终指标"""
+        self.end_time = time.time()
+        elapsed = self.end_time - self.start_time
+        self.actual_rps = self.total_requests / max(elapsed, 0.001)
+        
+        if self.response_times:
+            self.p50_response = statistics.median(self.response_times)
+            if len(self.response_times) >= 20:
+                self.p95_response = statistics.quantiles(self.response_times, n=20)[18]
+            else:
+                self.p95_response = max(self.response_times)
+            
+            if len(self.response_times) >= 100:
+                self.p99_response = statistics.quantiles(self.response_times, n=100)[98]
+            else:
+                self.p99_response = max(self.response_times)
+    
+    def to_dict(self) -> Dict:
+        """转换为字典"""
+        elapsed = self.end_time - self.start_time if self.end_time else time.time() - self.start_time
+        return {
+            "total_requests": self.total_requests,
+            "successful_requests": self.successful_requests,
+            "failed_requests": self.failed_requests,
+            "success_rate": self.successful_requests / max(self.total_requests, 1) * 100,
+            "duration_seconds": elapsed,
+            "target_rps": self.target_rps,
+            "actual_rps": self.actual_rps,
+            "server_accepted_rps": self.server_accepted_rps,
+            "avg_response_time_ms": self.total_response_time_ms / max(self.total_requests, 1),
+            "p50_response_time_ms": self.p50_response,
+            "p95_response_time_ms": self.p95_response,
+            "p99_response_time_ms": self.p99_response,
+            "avg_wait_time_ms": self.total_wait_time_ms / max(self.total_requests, 1),
+            "total_tokens": self.total_tokens,
+            "total_messages": self.total_messages,
+            "avg_tokens_per_request": self.total_tokens / max(self.total_requests, 1),
+            "avg_messages_per_request": self.total_messages / max(self.total_requests, 1),
+            "tokens_per_second": self.total_tokens / max(elapsed, 0.001),
+            "status_codes": self.status_codes
+        }
+
+
+class TokenBucket:
+    """令牌桶 - 精确控制请求速率"""
+    
+    def __init__(self, rate: float, capacity: Optional[int] = 1):
+        self.rate = rate
+        self.capacity = capacity if capacity else int(rate)
+        self.tokens = float(self.capacity)
+        self.last_update = time.perf_counter()
+        self._lock = threading.Lock()
+    
+    def acquire(self) -> float:
+        """获取一个令牌，如果需要则等待"""
+        wait_time = 0.0
+        with self._lock:
+            now = time.perf_counter()
+            elapsed = now - self.last_update
+            self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
+            self.last_update = now
+            
+            if self.tokens < 1:
+                wait_needed = (1 - self.tokens) / self.rate
+                self.last_update += wait_needed
+                self.tokens = 0
+                wait_time = wait_needed
+       
+        if wait_time > 0:
+            time.sleep(wait_time)
+        
+        return wait_time
+
+
+class LoadGenerator:
+    """负载生成器 - 按固定 RPS 发送 SimRequest 请求"""
+    
+    def __init__(self, server_url: str = "http://localhost:12306",
+                 rps: float = 100.0, total_requests: int = 1000,
+                 recorded_requests: int = 60,
+                 max_concurrent: int = 100,
+                 support_submit_workers: int = 8,
+                 timeout: float = 36000.0, warmup_requests: int = 0,
+                 sim_config: Optional[Dict] = None,
+                 sim_configs: Optional[List[Dict]] = None,
+                 payload_indices: Optional[List[int]] = None,
+                 payload_labels: Optional[List[str]] = None):
+        if total_requests <= 0:
+            raise ValueError("total_requests must be > 0")
+        if recorded_requests <= 0:
+            raise ValueError("recorded_requests must be > 0")
+        if rps <= 0:
+            raise ValueError("rps must be > 0")
+        if max_concurrent <= 0:
+            raise ValueError("max_concurrent must be > 0")
+        if support_submit_workers <= 0:
+            raise ValueError("support_submit_workers must be > 0")
+        self.server_url = server_url
+        self.rps = rps
+        self.total_requests = total_requests
+        self.recorded_requests = min(recorded_requests, total_requests)
+        self.max_concurrent = max_concurrent
+        self.support_submit_workers = support_submit_workers
+        self.timeout = timeout
+        self.warmup_requests = warmup_requests
+        if sim_configs is None:
+            if sim_config is None:
+                raise ValueError("sim_config or sim_configs is required")
+            sim_configs = [sim_config]
+        if not sim_configs:
+            raise ValueError("sim_configs must not be empty")
+        self.sim_configs = sim_configs
+        self.sim_config = sim_configs[0]
+        if payload_indices is None:
+            payload_indices = [0 for _ in range(total_requests)]
+        if len(payload_indices) != total_requests:
+            raise ValueError("payload_indices length must equal total_requests")
+        for payload_index in payload_indices:
+            if payload_index < 0 or payload_index >= len(sim_configs):
+                raise ValueError("payload_indices contains an invalid payload index")
+        self.payload_indices = payload_indices
+        self.payload_labels = payload_labels or [
+            f"payload-{payload_index}" for payload_index in range(len(sim_configs))
+        ]
+        
+        self.stats = LoadTestStats()
+        self.stats.target_rps = rps
+        self._stop_flag = threading.Event()
+        self._recorded_done = threading.Event()
+        self._recorded_completed = 0
+        self._support_submitted = 0
+        self._results: List[RequestResult] = []
+        self._results_lock = threading.Lock()
+        
+        self.session = self._create_session()
+        self.token_bucket = TokenBucket(rate=rps)
+    
+    def _create_session(self) -> requests.Session:
+        """创建优化的 HTTP 会话"""
+        session = requests.Session()
+        retry = Retry(total=0, backoff_factor=0, status_forcelist=[])
+        pool_size = self.max_concurrent + self.support_submit_workers
+        adapter = HTTPAdapter(
+            pool_connections=pool_size,
+            pool_maxsize=pool_size,
+            max_retries=retry,
+            pool_block=False
+        )
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        return session
+
+    def _get_sim_config(self, request_id: int) -> Dict:
+        if not self.payload_indices:
+            return self.sim_configs[0]
+        payload_index = self.payload_indices[request_id % len(self.payload_indices)]
+        return self.sim_configs[payload_index]
+    
+    def _send_request(self, request_id: int) -> RequestResult:
+        """发送单个 SimRequest（同步）"""
+        start_time = time.perf_counter()
+
+        # 生成 SimRequest 数据
+        sim_data = dict(self._get_sim_config(request_id))
+        sim_data["record_result"] = True
+
+        try:
+            response = self.session.post(
+                f"{self.server_url}/api/process",
+                json=sim_data,
+                timeout=self.timeout
+            )
+
+            response_time = (time.perf_counter() - start_time) * 1000
+
+            if response.status_code == 200:
+                data = response.json()
+                return RequestResult(
+                    request_id=request_id,
+                    status_code=response.status_code,
+                    response_time_ms=response_time,
+                    wait_time_ms=data.get("wait_time_ms", 0),
+                    process_time_ms=data.get("process_time_ms", 0),
+                    was_queued=data.get("was_queued", False),
+                    total_tokens=data.get("total_tokens", 0),
+                    total_messages=data.get("total_messages", 0)
+                )
+            else:
+                return RequestResult(
+                    request_id=request_id,
+                    status_code=response.status_code,
+                    response_time_ms=response_time,
+                    wait_time_ms=0,
+                    process_time_ms=0,
+                    was_queued=False,
+                    total_tokens=0,
+                    total_messages=0,
+                    error=f"HTTP {response.status_code}"
+                )
+                
+        except Exception as e:
+            response_time = (time.perf_counter() - start_time) * 1000
+            return RequestResult(
+                request_id=request_id,
+                status_code=0,
+                response_time_ms=response_time,
+                wait_time_ms=0,
+                process_time_ms=0,
+                was_queued=False,
+                total_tokens=0,
+                total_messages=0,
+                error=str(e)
+            )
+
+    def _send_support_request(self, request_id: int) -> None:
+        """Submit an unrecorded request that only maintains server/cache pressure."""
+        sim_data = dict(self._get_sim_config(request_id))
+        sim_data["record_result"] = False
+        try:
+            response = self.session.post(
+                f"{self.server_url}/api/process",
+                json=sim_data,
+                # The server returns 202 as soon as the support work is queued.
+                timeout=5,
+            )
+            if response.status_code not in (200, 202):
+                logger.warning(
+                    "Support request %s was rejected with HTTP %s",
+                    request_id,
+                    response.status_code,
+                )
+            else:
+                with self._results_lock:
+                    self._support_submitted += 1
+        except Exception as exc:
+            logger.warning("Support request %s failed to submit: %s", request_id, exc)
+
+    def _set_support_cancellation(self, cancel: bool) -> None:
+        action = "cancel" if cancel else "reset"
+        try:
+            response = self.session.post(
+                f"{self.server_url}/api/support/{action}",
+                timeout=5,
+            )
+            if response.status_code != 200:
+                logger.warning(
+                    "Could not %s support requests: HTTP %s",
+                    action,
+                    response.status_code,
+                )
+        except Exception as exc:
+            logger.warning("Could not %s support requests: %s", action, exc)
+    
+    def _worker(self, request_id: int):
+        """Execute and record a measured request."""
+        self.token_bucket.acquire()
+        result = self._send_request(request_id)
+        
+        with self._results_lock:
+            self.stats.add_result(result)
+            self._results.append(result)
+            self._recorded_completed += 1
+            completed = self._recorded_completed
+            if completed >= self.recorded_requests:
+                self._recorded_done.set()
+        
+        if completed % max(1, self.recorded_requests // 10) == 0:
+            elapsed = time.time() - self.stats.start_time
+            current_rps = completed / max(elapsed, 0.001)
+            logger.info(
+                "Recorded progress: %s/%s (%.1f RPS)",
+                completed,
+                self.recorded_requests,
+                current_rps,
+            )
+    
+    def run(self) -> LoadTestStats:
+        """运行负载测试"""
+        logger.info(
+            "Starting load test: up to %s requests at %s RPS; record first %s",
+            self.total_requests,
+            self.rps,
+            self.recorded_requests,
+        )
+        logger.info(f"Target server: {self.server_url}")
+        if len(self.sim_configs) == 1:
+            logger.info(
+                f"SimRequest config: n={self.sim_config['n']}, n_task={self.sim_config['n_task']}"
+            )
+        else:
+            for payload_index, sim_config in enumerate(self.sim_configs):
+                label = (
+                    self.payload_labels[payload_index]
+                    if payload_index < len(self.payload_labels)
+                    else f"payload-{payload_index}"
+                )
+                logger.info(
+                    "SimRequest config %s: requests=%s, n=%s, n_task=%s",
+                    label,
+                    self.payload_indices.count(payload_index),
+                    sim_config["n"],
+                    sim_config["n_task"],
+                )
+        
+        self.stats = LoadTestStats()
+        self.stats.target_rps = self.rps
+        self.stats.start_time = time.time()
+        self._results = []
+        self._recorded_completed = 0
+        self._support_submitted = 0
+        self._recorded_done.clear()
+        
+        # 预热
+        if self.warmup_requests > 0:
+            logger.info(f"Warming up with {self.warmup_requests} requests...")
+            for i in range(self.warmup_requests):
+                try:
+                    sim_data = self._get_sim_config(i)
+                    self.session.post(
+                        f"{self.server_url}/api/process",
+                        json=sim_data,
+                        timeout=self.timeout
+                    )
+                except:
+                    pass
+            time.sleep(0.5)
+        
+        # 重置服务器统计
+        try:
+            self.session.post(f"{self.server_url}/api/stats/reset", timeout=5)
+        except:
+            pass
+        self._set_support_cancellation(cancel=False)
+        
+        logger.info(
+            "Using %s recorded-request workers and %s support-submit workers",
+            self.max_concurrent,
+            self.support_submit_workers,
+        )
+        
+        recorded_executor = ThreadPoolExecutor(max_workers=self.max_concurrent)
+        support_executor = ThreadPoolExecutor(
+            max_workers=self.support_submit_workers
+        )
+        recorded_futures = []
+        try:
+            for i in range(self.total_requests):
+                if self._stop_flag.is_set() or self._recorded_done.is_set():
+                    break
+
+                if i < self.recorded_requests:
+                    recorded_futures.append(recorded_executor.submit(self._worker, i))
+                else:
+                    support_executor.submit(self._send_support_request, i)
+
+                # Wake up early when the last recorded request completes.
+                self._recorded_done.wait(timeout=1 / self.rps)
+
+            for future in as_completed(recorded_futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.error(f"Worker error: {e}")
+        finally:
+            self._set_support_cancellation(cancel=True)
+            recorded_executor.shutdown(wait=True)
+            support_executor.shutdown(wait=False, cancel_futures=True)
+
+        
+        self.stats.calculate_metrics()
+        
+        # 获取服务器端统计
+        try:
+            resp = self.session.get(f"{self.server_url}/api/stats", timeout=5)
+            server_stats = resp.json()
+            self.stats.server_accepted_rps = server_stats.get("throughput_rps", 0)
+            logger.info(f"Server reported throughput: {self.stats.server_accepted_rps:.2f} RPS")
+            logger.info(f"Server total tokens: {server_stats.get('total_tokens_processed', 0)}")
+        except Exception as e:
+            logger.warning(f"Could not get server stats: {e}")
+        
+        elapsed = time.time() - self.stats.start_time
+        logger.info(
+            "Recorded requests completed: %s; support requests submitted: %s",
+            self._recorded_completed,
+            self._support_submitted,
+        )
+        logger.info(f"Load test completed in {elapsed:.2f} seconds")
+        
+        return self.stats
+    
+    def stop(self):
+        """停止测试"""
+        self._stop_flag.set()
+    
+    def print_report(self):
+        """打印测试报告"""
+        metrics = self.stats.to_dict()
+        
+        print("\n" + "=" * 70)
+        print("LOAD TEST REPORT - SimRequest")
+        print("=" * 70)
+        print(f"Target RPS:              {metrics['target_rps']:.2f}")
+        print(f"Actual RPS:              {metrics['actual_rps']:.2f}")
+        print(f"Server Accepted RPS:     {metrics['server_accepted_rps']:.2f}")
+        print(f"Duration:                {metrics['duration_seconds']:.2f} seconds")
+        print(f"Total Requests:          {metrics['total_requests']}")
+        print(f"Successful:              {metrics['successful_requests']} ({metrics['success_rate']:.1f}%)")
+        print(f"Failed:                  {metrics['failed_requests']}")
+        print("-" * 70)
+        print(f"Total Tokens:            {metrics['total_tokens']:,}")
+        print(f"Total Messages:          {metrics['total_messages']:,}")
+        print(f"Tokens/Second:           {metrics['tokens_per_second']:,.0f}")
+        print(f"Avg Tokens/Request:      {metrics['avg_tokens_per_request']:.1f}")
+        print(f"Avg Messages/Request:    {metrics['avg_messages_per_request']:.1f}")
+        print("-" * 70)
+        print(f"Avg Response Time:       {metrics['avg_response_time_ms']:.2f} ms")
+        print(f"P50 Response Time:       {metrics['p50_response_time_ms']:.2f} ms")
+        print(f"P95 Response Time:       {metrics['p95_response_time_ms']:.2f} ms")
+        print(f"P99 Response Time:       {metrics['p99_response_time_ms']:.2f} ms")
+        print(f"Avg Wait Time:           {metrics['avg_wait_time_ms']:.2f} ms")
+        print("-" * 70)
+        print(f"Status Codes:            {metrics['status_codes']}")
+        print("=" * 70 + "\n")
+
+
+def resolve_payload_json(
+    json_file: Optional[str] = None,
+    default_path: Path = DEFAULT_PAYLOAD_JSON,
+) -> Path:
+    """Resolve replay JSON path from CLI input or fall back to the default file."""
+    if json_file is None:
+        resolved_path = default_path
+    else:
+        input_path = Path(json_file).expanduser()
+        if input_path.is_absolute():
+            resolved_path = input_path
+        else:
+            cwd_path = (Path.cwd() / input_path).resolve()
+            if cwd_path.exists():
+                resolved_path = cwd_path
+            else:
+                resolved_path = (PROJECT_ROOT / input_path).resolve()
+
+    if not resolved_path.is_file():
+        raise FileNotFoundError(f"Replay JSON file not found: {resolved_path}")
+
+    return resolved_path
+
+
+def parse_json_ratio(json_ratio: str) -> Tuple[float, float]:
+    parts = json_ratio.split(":")
+    if len(parts) != 2:
+        raise ValueError("json-ratio must use A:B format")
+    try:
+        weights = (float(parts[0]), float(parts[1]))
+    except ValueError as exc:
+        raise ValueError("json-ratio values must be numeric") from exc
+    if weights[0] <= 0 or weights[1] <= 0:
+        raise ValueError("json-ratio values must be positive")
+    return weights
+
+
+def allocate_payload_counts(total_requests: int, weights: Tuple[float, float]) -> List[int]:
+    if total_requests < 0:
+        raise ValueError("total_requests must be >= 0")
+    total_weight = weights[0] + weights[1]
+    raw_counts = [total_requests * weight / total_weight for weight in weights]
+    counts = [int(raw_count) for raw_count in raw_counts]
+    remaining = total_requests - sum(counts)
+    remainders = [
+        (raw_counts[index] - counts[index], index)
+        for index in range(len(counts))
+    ]
+    for _, index in sorted(remainders, key=lambda item: (-item[0], item[1]))[:remaining]:
+        counts[index] += 1
+    return counts
+
+
+def build_payload_indices(
+    total_requests: int,
+    json_ratio: str,
+    trace_seed: int,
+) -> Tuple[List[int], List[int]]:
+    weights = parse_json_ratio(json_ratio)
+    counts = allocate_payload_counts(total_requests, weights)
+    payload_indices: List[int] = []
+    for payload_index, count in enumerate(counts):
+        payload_indices.extend([payload_index] * count)
+    rng = random.Random(trace_seed)
+    rng.shuffle(payload_indices)
+    return payload_indices, counts
+
+
+def run_client(server_url: str = "http://localhost:12306",
+               rps: float = 100.0, total_requests: int = 1000,
+               recorded_requests: int = 60,
+               max_concurrent: int = 100,
+               support_submit_workers: int = 8,
+               model_name: str = None, json_file: Optional[str] = None,
+               json_file_a: Optional[str] = None,
+               json_file_b: Optional[str] = None,
+               json_ratio: str = "1:1",
+               trace_seed: int = 0):
+    """运行客户端负载测试"""
+    if json_file is not None:
+        payload_json = resolve_payload_json(json_file)
+        logger.info("Using replay JSON: %s", payload_json)
+        sim_config = read_replay_data(str(payload_json), model_name)
+        generator = LoadGenerator(
+            server_url=server_url,
+            rps=rps,
+            total_requests=total_requests,
+            recorded_requests=recorded_requests,
+            max_concurrent=max_concurrent,
+            support_submit_workers=support_submit_workers,
+            sim_config=sim_config,
+        )
+    else:
+        payload_json_a = resolve_payload_json(json_file_a, DEFAULT_PAYLOAD_JSON_A)
+        payload_json_b = resolve_payload_json(json_file_b, DEFAULT_PAYLOAD_JSON_B)
+        payload_indices, payload_counts = build_payload_indices(
+            total_requests=total_requests,
+            json_ratio=json_ratio,
+            trace_seed=trace_seed,
+        )
+        logger.info(
+            "Using mixed replay JSONs: %s (%s requests), %s (%s requests), ratio=%s, seed=%s",
+            payload_json_a,
+            payload_counts[0],
+            payload_json_b,
+            payload_counts[1],
+            json_ratio,
+            trace_seed,
+        )
+        sim_configs = [
+            read_replay_data(str(payload_json_a), model_name),
+            read_replay_data(str(payload_json_b), model_name),
+        ]
+        generator = LoadGenerator(
+            server_url=server_url,
+            rps=rps,
+            total_requests=total_requests,
+            recorded_requests=recorded_requests,
+            max_concurrent=max_concurrent,
+            support_submit_workers=support_submit_workers,
+            sim_configs=sim_configs,
+            payload_indices=payload_indices,
+            payload_labels=[str(payload_json_a), str(payload_json_b)],
+        )
+    stats = generator.run()
+    generator.print_report()
+    return stats
+
+
+if __name__ == "__main__":
+    
+    parser = argparse.ArgumentParser(description="Load Generator Client with SimRequest")
+    parser.add_argument("--url", default="http://localhost:12309", help="Server URL")
+    parser.add_argument("--rps", type=float, default=100.0, help="Requests per second")
+    parser.add_argument("--requests", type=int, default=1000, help="Total requests")
+    parser.add_argument(
+        "--recorded-requests",
+        type=int,
+        default=60,
+        help=(
+            "Number of initial requests to record and wait for. Remaining requests "
+            "only maintain pressure; the client exits when all recorded requests finish."
+        ),
+    )
+    parser.add_argument(
+        "--max-concurrent",
+        type=int,
+        default=100,
+        help="Maximum number of recorded requests executed concurrently",
+    )
+    parser.add_argument(
+        "--support-submit-workers",
+        type=int,
+        default=8,
+        help="Worker threads used to submit unrecorded pressure requests",
+    )
+    parser.add_argument("--sim-n", type=int, default=10, help="SimRequest n value")
+    parser.add_argument("--sim-n-task", type=int, default=3, help="SimRequest n_task value")
+    parser.add_argument(
+        '--model',
+        default='/artesia-workspace/models/GLM-4.7',
+        type=str,
+    )
+    parser.add_argument(
+        "--json-file",
+        default=None,
+        help="Legacy single replay JSON file path. If set, disables mixed replay mode.",
+    )
+    parser.add_argument(
+        "--json-file-a",
+        default=None,
+        help=f"First mixed replay JSON file path (default: {DEFAULT_PAYLOAD_JSON_A})",
+    )
+    parser.add_argument(
+        "--json-file-b",
+        default=None,
+        help=f"Second mixed replay JSON file path (default: {DEFAULT_PAYLOAD_JSON_B})",
+    )
+    parser.add_argument(
+        "--json-ratio",
+        default="1:1",
+        help="Mixed replay ratio in A:B format (default: 1:1)",
+    )
+    parser.add_argument(
+        "--trace-seed",
+        type=int,
+        default=0,
+        help="Seed used to shuffle the mixed replay selection sequence",
+    )
+    args = parser.parse_args()
+    run_client(
+        server_url=args.url,
+        rps=args.rps,
+        total_requests=args.requests,
+        recorded_requests=args.recorded_requests,
+        max_concurrent=args.max_concurrent,
+        support_submit_workers=args.support_submit_workers,
+        model_name=args.model,
+        json_file=args.json_file,
+        json_file_a=args.json_file_a,
+        json_file_b=args.json_file_b,
+        json_ratio=args.json_ratio,
+        trace_seed=args.trace_seed,
+    )
