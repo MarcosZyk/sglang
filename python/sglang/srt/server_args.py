@@ -485,6 +485,9 @@ class ServerArgs:
     hicache_storage_backend_extra_config: Optional[str] = None
     # LMCache
     enable_lmcache: bool = False
+    # Artesia
+    enable_artesia: bool = False
+    enable_tree_log: bool = False
 
     # Ktransformers/AMX expert parallelism
     kt_weight_path: Optional[str] = None
@@ -2268,6 +2271,14 @@ class ServerArgs:
             envs.SGLANG_TOOL_STRICT_LEVEL.set(ToolStrictLevel.PARAMETER)
 
     def _handle_cache_compatibility(self):
+        if self.enable_artesia and (
+            self.enable_hierarchical_cache or self.enable_lmcache
+        ):
+            raise ValueError(
+                "--enable-artesia cannot be combined with "
+                "--enable-hierarchical-cache or --enable-lmcache."
+            )
+
         if self.enable_hierarchical_cache and self.disable_radix_cache:
             raise ValueError(
                 "The arguments enable-hierarchical-cache and disable-radix-cache are mutually exclusive "
@@ -3754,6 +3765,16 @@ class ServerArgs:
             "--enable-lmcache",
             action="store_true",
             help="Using LMCache as an alternative hierarchical cache solution",
+        )
+        parser.add_argument(
+            "--enable-artesia",
+            action="store_true",
+            help="Use Artesia as the external KV cache backend.",
+        )
+        parser.add_argument(
+            "--enable-tree-log",
+            action="store_true",
+            help="Log Artesia radix-tree insert and removal operations.",
         )
 
         # Ktransformer server args

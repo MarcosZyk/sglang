@@ -304,6 +304,11 @@ class CompletionResponse(BaseModel):
     choices: List[CompletionResponseChoice]
     usage: UsageInfo
     metadata: Optional[Dict[str, Any]] = None
+    prefill_time: float = 0.0
+    artesia_time: float = 0.0
+    decode_time: List[float] = Field(default_factory=list)
+    num_local_cache: int = 0
+    num_global_cache: int = 0
 
 
 class CompletionResponseStreamChoice(BaseModel):
@@ -534,6 +539,11 @@ class ChatCompletionRequest(BaseModel):
     bootstrap_port: Optional[Union[List[Optional[int]], int]] = None
     bootstrap_room: Optional[Union[List[int], int]] = None
 
+    # Artesia semantic metadata
+    agent_id: Optional[str] = None
+    task_id: Optional[int] = None
+    call_id: Optional[str] = None
+
     # For data parallel rank routing
     data_parallel_rank: Optional[int] = None
 
@@ -731,6 +741,11 @@ class ChatCompletionResponse(BaseModel):
     choices: List[ChatCompletionResponseChoice]
     usage: UsageInfo
     metadata: Optional[Dict[str, Any]] = None
+    prefill_time: float = 0.0
+    artesia_time: float = 0.0
+    decode_time: List[float] = Field(default_factory=list)
+    num_local_cache: int = 0
+    num_global_cache: int = 0
 
 
 class DeltaMessage(BaseModel):

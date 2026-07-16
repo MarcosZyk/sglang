@@ -667,6 +667,19 @@ class Scheduler(
                 self.tp_worker.register_hicache_layer_transfer_counter(
                     self.tree_cache.cache_controller.layer_done_counter
                 )
+            elif server_args.enable_artesia:
+                from sglang.srt.mem_cache.storage.artesia.artesia_radix_cache import (
+                    ArtesiaRadixCache,
+                )
+
+                self.tree_cache = ArtesiaRadixCache(
+                    params=params,
+                    model_config=self.model_config,
+                    tp_size=self.tp_size,
+                    rank=self.tp_rank,
+                    tp_group=self.tp_group,
+                    enable_tree_log=server_args.enable_tree_log,
+                )
             elif self.is_hybrid_swa:
                 from sglang.srt.mem_cache.swa_radix_cache import SWARadixCache
 
@@ -1079,8 +1092,10 @@ class Scheduler(
                 continue
 
             # Get the next batch to run
+            self.start_artesia_batch_timing()
             batch = self.get_next_batch_to_run()
             self.cur_batch = batch
+            self.attach_artesia_batch_timing(batch)
 
             # Launch the current batch
             if batch:
@@ -1115,8 +1130,10 @@ class Scheduler(
                 continue
 
             # Get the next batch to run
+            self.start_artesia_batch_timing()
             batch = self.get_next_batch_to_run()
             self.cur_batch = batch
+            self.attach_artesia_batch_timing(batch)
             disable_overlap_for_batch = self.is_disable_overlap_for_batch(batch)
 
             # If we do not need to overlap the current batch with the last batch,
@@ -1454,6 +1471,9 @@ class Scheduler(
                 ),
                 http_worker_ipc=recv_req.http_worker_ipc,
                 dllm_config=self.dllm_config,
+                agent_id=recv_req.agent_id,
+                task_id=recv_req.task_id,
+                call_id=recv_req.call_id,
             )
             req.tokenizer = self.tokenizer
 

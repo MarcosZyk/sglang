@@ -193,6 +193,11 @@ def _handle_output_by_index(output, i):
             token_steps=_extract_field_by_index(
                 output, "token_steps", i, check_length=False
             ),
+            prefill_times=_extract_field_by_index(output, "prefill_times", i),
+            artesia_times=_extract_field_by_index(output, "artesia_times", i),
+            decode_times=_extract_field_by_index(output, "decode_times", i),
+            num_local_caches=_extract_field_by_index(output, "num_local_caches", i),
+            num_global_caches=_extract_field_by_index(output, "num_global_caches", i),
         )
     elif isinstance(output, BatchEmbeddingOutput):
         new_output = BatchEmbeddingOutput(
@@ -279,6 +284,11 @@ def _handle_output_by_index(output, i):
             token_steps=_extract_field_by_index(
                 output, "token_steps", i, check_length=False
             ),
+            prefill_times=_extract_field_by_index(output, "prefill_times", i),
+            artesia_times=_extract_field_by_index(output, "artesia_times", i),
+            decode_times=_extract_field_by_index(output, "decode_times", i),
+            num_local_caches=_extract_field_by_index(output, "num_local_caches", i),
+            num_global_caches=_extract_field_by_index(output, "num_global_caches", i),
         )
     elif isinstance(output, BatchMultimodalOutput):
         new_output = BatchMultimodalOutput(

@@ -913,6 +913,9 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
                 return_hidden_states=obj.return_hidden_states,
                 return_routed_experts=obj.return_routed_experts,
                 data_parallel_rank=obj.data_parallel_rank,
+                agent_id=obj.agent_id,
+                task_id=obj.task_id,
+                call_id=obj.call_id,
                 priority=obj.priority,
                 extra_key=obj.extra_key,
                 need_wait_for_image=obj.need_wait_for_image,
@@ -1464,6 +1467,21 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
                 "prompt_tokens": recv_obj.prompt_tokens[i],
                 "weight_version": self.server_args.weight_version,
                 "total_retractions": recv_obj.retraction_counts[i],
+                "prefill_time": (
+                    recv_obj.prefill_times[i] if recv_obj.prefill_times else 0.0
+                ),
+                "artesia_time": (
+                    recv_obj.artesia_times[i] if recv_obj.artesia_times else 0.0
+                ),
+                "decode_time": (
+                    recv_obj.decode_times[i] if recv_obj.decode_times else []
+                ),
+                "num_local_cache": (
+                    recv_obj.num_local_caches[i] if recv_obj.num_local_caches else 0
+                ),
+                "num_global_cache": (
+                    recv_obj.num_global_caches[i] if recv_obj.num_global_caches else 0
+                ),
             }
 
             if self.enable_metrics:

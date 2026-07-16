@@ -348,8 +348,10 @@ class SchedulerDisaggregationPrefillMixin:
             )
 
             # Get the next batch to run
+            self.start_artesia_batch_timing()
             batch = self.get_next_disagg_prefill_batch_to_run()
             self.cur_batch = batch
+            self.attach_artesia_batch_timing(batch)
 
             # Launch the current batch
             if batch:
@@ -376,8 +378,10 @@ class SchedulerDisaggregationPrefillMixin:
             )
 
             # Get the next batch to run
+            self.start_artesia_batch_timing()
             batch = self.get_next_disagg_prefill_batch_to_run()
             self.cur_batch = batch
+            self.attach_artesia_batch_timing(batch)
 
             # Launch the current batch
             if batch:
@@ -428,6 +432,7 @@ class SchedulerDisaggregationPrefillMixin:
 
         if copy_done is not None:
             copy_done.synchronize()
+        self.finish_artesia_batch_timing(batch)
 
         logprob_pt = 0
         # Transfer kv for prefill completed requests and add it into disagg_prefill_inflight_queue
@@ -583,6 +588,7 @@ class SchedulerDisaggregationPrefillMixin:
             req.time_stats.completion_time = time.perf_counter()
 
         # Stream requests which have finished transfer
+        self.consume_artesia_offload_timing(done_reqs)
         self.stream_output(
             done_reqs,
             any(req.return_logprob for req in done_reqs),

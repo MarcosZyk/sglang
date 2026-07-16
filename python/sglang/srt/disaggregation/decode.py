@@ -841,8 +841,10 @@ class SchedulerDisaggregationDecodeMixin:
             self.process_decode_queue()
 
             # Get the next batch to run
+            self.start_artesia_batch_timing()
             batch = self.get_next_disagg_decode_batch_to_run()
             self.cur_batch = batch
+            self.attach_artesia_batch_timing(batch)
 
             # Launch the current batch
             if batch:
@@ -868,8 +870,10 @@ class SchedulerDisaggregationDecodeMixin:
             self.process_decode_queue()
 
             # Get the next batch to run
+            self.start_artesia_batch_timing()
             batch = self.get_next_disagg_decode_batch_to_run()
             self.cur_batch = batch
+            self.attach_artesia_batch_timing(batch)
 
             # Launch the current batch
             if batch:

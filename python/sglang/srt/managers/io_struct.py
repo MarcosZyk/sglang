@@ -225,6 +225,11 @@ class GenerateReqInput(BaseReq, APIServingTimingMixin):
     bootstrap_pair_key: Optional[Union[List[str], str]] = None
     decode_tp_size: Optional[Union[List[Optional[int]], int]] = None
 
+    # Artesia semantic metadata
+    agent_id: Optional[Union[List[Optional[str]], str]] = None
+    task_id: Optional[Union[List[Optional[int]], int]] = None
+    call_id: Optional[Union[List[Optional[str]], str]] = None
+
     # Require reasoning for the request (hybrid reasoning model only)
     require_reasoning: bool = False
 
@@ -655,6 +660,15 @@ class GenerateReqInput(BaseReq, APIServingTimingMixin):
             decode_tp_size=(
                 self.decode_tp_size[i] if self.decode_tp_size is not None else None
             ),
+            agent_id=(
+                self.agent_id[i] if isinstance(self.agent_id, list) else self.agent_id
+            ),
+            task_id=(
+                self.task_id[i] if isinstance(self.task_id, list) else self.task_id
+            ),
+            call_id=(
+                self.call_id[i] if isinstance(self.call_id, list) else self.call_id
+            ),
             data_parallel_rank=(
                 self.data_parallel_rank if self.data_parallel_rank is not None else None
             ),
@@ -721,6 +735,11 @@ class TokenizedGenerateReqInput(BaseReq):
     bootstrap_room: Optional[int] = None
     bootstrap_pair_key: Optional[str] = None
     decode_tp_size: Optional[int] = None
+
+    # Artesia semantic metadata
+    agent_id: Optional[str] = None
+    task_id: Optional[int] = None
+    call_id: Optional[str] = None
 
     # Require reasoning for the request (hybrid reasoning model only)
     require_reasoning: bool = False
@@ -985,6 +1004,13 @@ class BatchTokenIDOutput(
     # Load for DP balance
     load: GetLoadReqOutput = None
 
+    # Artesia and model execution tracing
+    prefill_times: Optional[List[float]] = None
+    artesia_times: Optional[List[float]] = None
+    decode_times: Optional[List[List[float]]] = None
+    num_global_caches: Optional[List[int]] = None
+    num_local_caches: Optional[List[int]] = None
+
 
 @dataclass
 class BatchMultimodalDecodeReq(BaseBatchReq):
@@ -1069,6 +1095,13 @@ class BatchStrOutput(
 
     # Load for DP balance
     load: GetLoadReqOutput = None
+
+    # Artesia and model execution tracing
+    prefill_times: Optional[List[float]] = None
+    artesia_times: Optional[List[float]] = None
+    decode_times: Optional[List[List[float]]] = None
+    num_global_caches: Optional[List[int]] = None
+    num_local_caches: Optional[List[int]] = None
 
 
 @dataclass

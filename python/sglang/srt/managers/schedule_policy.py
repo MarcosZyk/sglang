@@ -176,18 +176,26 @@ class SchedulePolicy:
             extra_key = r.extra_key
             # NOTE: the prefix_indices must always be aligned with last_node
             match_result = self.tree_cache.match_prefix(
-                rid=r.rid, key=RadixKey(token_ids=prefix_ids, extra_key=extra_key)
+                rid=r.rid,
+                key=RadixKey(token_ids=prefix_ids, extra_key=extra_key),
+                req=r,
+                agent_id=r.agent_id,
+                task_id=r.task_id,
             )
             (
                 r.prefix_indices,
                 r.last_node,
                 r.last_host_node,
                 r.host_hit_length,
+                r.num_local_cache,
+                r.num_global_cache,
             ) = (
                 match_result.device_indices,
                 match_result.last_device_node,
                 match_result.last_host_node,
                 match_result.host_hit_length,
+                match_result.num_local_cache,
+                match_result.num_global_cache,
             )
 
             # NOTE(sang): This logic is for in-batch prefix caching;

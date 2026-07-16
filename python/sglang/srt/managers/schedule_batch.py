@@ -41,6 +41,7 @@ import dataclasses
 import logging
 import re
 import time
+from collections import deque
 from enum import Enum, auto
 from http import HTTPStatus
 from itertools import chain
@@ -516,6 +517,9 @@ class Req:
         extra_key: Optional[str] = None,
         dimensions: Optional[int] = None,
         http_worker_ipc: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        task_id: Optional[int] = None,
+        call_id: Optional[str] = None,
     ):
         # Input and output info
         self.rid = rid
@@ -624,6 +628,8 @@ class Req:
         self.last_node: Any = None
         self.last_host_node: Any = None
         self.host_hit_length = 0
+        self.num_local_cache: int = 0
+        self.num_global_cache: int = 0
         # The node to lock until for swa radix tree lock ref
         self.swa_uuid_for_lock: Optional[int] = None
         # The prefix length that is inserted into the tree cache
@@ -737,6 +743,17 @@ class Req:
 
         # For data parallel rank routing
         self.data_parallel_rank: Optional[int] = data_parallel_rank
+
+        # Artesia metadata and custom execution trace.
+        self.agent_id = agent_id
+        self.task_id = task_id
+        self.call_id = call_id
+        self.prefill_time: float = 0.0
+        self.artesia_time: float = 0.0
+        self.load_kv_elapsed: float = 0.0
+        self.offload_kv_elapsed: float = 0.0
+        self.decode_time: List[float] = []
+        self.push_to_model_runner_time = deque()
 
         # the start index of the sent kv cache
         # We want to send it chunk by chunk for chunked prefill.
@@ -859,8 +876,11 @@ class Req:
         if tree_cache is not None:
             match_result = tree_cache.match_prefix(
                 key=RadixKey(token_ids=token_ids, extra_key=self.extra_key),
+                req=self,
+                agent_id=self.agent_id,
+                task_id=self.task_id,
                 **(
-                    {"req": self, "cow_mamba": True}
+                    {"cow_mamba": True}
                     if isinstance(tree_cache, MambaRadixCache)
                     else {}
                 ),
@@ -878,6 +898,9 @@ class Req:
                 match_result.host_hit_length,
                 match_result.mamba_branching_seqlen,
             )
+            if self.num_global_cache == 0 or match_result.num_global_cache > 0:
+                self.num_local_cache = match_result.num_local_cache
+                self.num_global_cache = match_result.num_global_cache
             self.cache_protected_len = len(self.prefix_indices)
 
         if (

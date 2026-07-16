@@ -44,6 +44,54 @@ class SchedulerOutputProcessorMixin:
     We put them into a separate file to make the `scheduler.py` shorter.
     """
 
+    def start_artesia_batch_timing(self: Scheduler):
+        """Start the custom batch trace before scheduling/cache lookup."""
+        self.device_module.synchronize()
+        self.start_exe_time = time.perf_counter()
+
+    def attach_artesia_batch_timing(self: Scheduler, batch: Optional[ScheduleBatch]):
+        """Attach the start timestamp and consume Artesia load latency once."""
+        if batch is None:
+            return
+
+        batch_load_kv_total = sum(req.load_kv_elapsed for req in batch.reqs)
+        for req in batch.reqs:
+            req.load_kv_elapsed = 0.0
+            req.push_to_model_runner_time.append(self.start_exe_time)
+        if batch_load_kv_total > 0:
+            for req in batch.reqs:
+                req.artesia_time += batch_load_kv_total
+
+    def finish_artesia_batch_timing(self: Scheduler, batch: ScheduleBatch):
+        """Record synchronized prefill/decode execution time for this batch."""
+        self.device_module.synchronize()
+        end_exe_time = time.perf_counter()
+        decoding_reqs = set(batch.decoding_reqs or [])
+
+        for req in batch.reqs:
+            if not req.push_to_model_runner_time:
+                continue
+            elapsed = end_exe_time - req.push_to_model_runner_time.popleft()
+            if batch.forward_mode.is_decode() or (
+                batch.forward_mode.is_mixed() and req in decoding_reqs
+            ):
+                req.decode_time.append(elapsed)
+            else:
+                req.prefill_time += elapsed
+
+    def consume_artesia_offload_timing(self: Scheduler, reqs: List[Req]) -> float:
+        """Charge a blocking batch's total offload latency exactly once."""
+        batch_offload_total = sum(req.offload_kv_elapsed for req in reqs)
+        for req in reqs:
+            req.offload_kv_elapsed = 0.0
+
+        if batch_offload_total > 0:
+            for req in reqs:
+                if req.finished() and not req.is_retracted:
+                    req.artesia_time += batch_offload_total
+                    req.prefill_time += batch_offload_total
+        return batch_offload_total
+
     def process_batch_result_prebuilt(self: Scheduler, batch: ScheduleBatch):
         assert self.disaggregation_mode == DisaggregationMode.DECODE
         for req in batch.reqs:
@@ -81,6 +129,7 @@ class SchedulerOutputProcessorMixin:
         if self.is_generation:
             if result.copy_done is not None:
                 result.copy_done.synchronize()
+            self.finish_artesia_batch_timing(batch)
 
             (
                 logits_output,
@@ -226,6 +275,7 @@ class SchedulerOutputProcessorMixin:
         else:  # embedding or reward model
             if result.copy_done is not None:
                 result.copy_done.synchronize()
+            self.finish_artesia_batch_timing(batch)
 
             is_sparse = envs.SGLANG_EMBEDDINGS_SPARSE_HEAD.is_set()
 
@@ -272,6 +322,7 @@ class SchedulerOutputProcessorMixin:
                     thread_finish_flag=req.finished(),
                 )
 
+        self.consume_artesia_offload_timing(batch.reqs)
         self.stream_output(batch.reqs, batch.return_logprob, skip_stream_req)
 
     def _resolve_spec_overlap_token_ids(
@@ -338,6 +389,7 @@ class SchedulerOutputProcessorMixin:
 
             self.tree_cache.cache_unfinished_req(req)
 
+        self.consume_artesia_offload_timing(batch.reqs)
         self.stream_output(batch.reqs, batch.return_logprob)
         self.token_to_kv_pool_allocator.free_group_end()
 
@@ -348,6 +400,7 @@ class SchedulerOutputProcessorMixin:
     ):
         if result.copy_done is not None:
             result.copy_done.synchronize()
+        self.finish_artesia_batch_timing(batch)
 
         logits_output, next_token_ids, can_run_cuda_graph = (
             result.logits_output,
@@ -451,6 +504,7 @@ class SchedulerOutputProcessorMixin:
                     self.abort_request(AbortReq(rid=req.rid))
                 req.grammar.finished = req.finished()
 
+        self.consume_artesia_offload_timing(batch.reqs)
         self.stream_output(batch.reqs, batch.return_logprob)
         self.token_to_kv_pool_allocator.free_group_end()
 
@@ -847,6 +901,11 @@ class SchedulerOutputProcessorMixin:
         prefill_launch_delays = []
         prefill_launch_latencies = []
         prefill_finished_timestamps = []
+        prefill_times = []
+        artesia_times = []
+        decode_times = []
+        num_global_caches = []
+        num_local_caches = []
 
         if return_logprob:
             input_token_logprobs_val = []
@@ -947,6 +1006,11 @@ class SchedulerOutputProcessorMixin:
                 completion_tokens.append(len(output_ids_))
                 cached_tokens.append(req.cached_tokens)
                 retraction_counts.append(req.retraction_count)
+                prefill_times.append(req.prefill_time)
+                artesia_times.append(req.artesia_time)
+                decode_times.append(list(req.decode_time))
+                num_local_caches.append(req.num_local_cache)
+                num_global_caches.append(req.num_global_cache)
 
                 queue_times.append(req.time_stats.get_queueing_time())
                 forward_entry_times.append(req.time_stats.forward_entry_time)
@@ -1093,6 +1157,11 @@ class SchedulerOutputProcessorMixin:
                     placeholder_tokens_val=None,
                     retraction_counts=retraction_counts,
                     load=load,
+                    prefill_times=prefill_times,
+                    artesia_times=artesia_times,
+                    decode_times=decode_times,
+                    num_local_caches=num_local_caches,
+                    num_global_caches=num_global_caches,
                 )
             )
 
