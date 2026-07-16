@@ -29,7 +29,7 @@ python main.py \
   --decode-throughput-tps 65 \
   --kv-cache-kb-per-token 144 \
   --gpu-capacity-gb 100 \
-  --tokenizer Qwen/Qwen3-8B \
+  --tokenizer /artesia-workspace/models/GLM-4.7 \
   --enable-artesia \
   --eviction-policy lru
 ```

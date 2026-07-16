@@ -9,6 +9,6 @@ python main.py \
     --kv-cache-kb-per-token 144 \
     --decode-max-concurrency 9 \
     --gpu-capacity-gb 196 \
-    --tokenizer Qwen/Qwen3-8B \
+    --tokenizer /artesia-workspace/models/GLM-4.7 \
     --enable-artesia \
     --eviction-policy mru

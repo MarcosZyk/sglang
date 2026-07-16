@@ -228,7 +228,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--tokenizer",
         type=str,
-        default="Qwen/Qwen3-8B",
+        default="/artesia-workspace/models/GLM-4.7",
         help="Optional tokenizer name/path. If omitted, use request.model as the tokenizer.",
     )
     parser.add_argument("--seed", type=int, default=None)

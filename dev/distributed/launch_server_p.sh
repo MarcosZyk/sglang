@@ -6,7 +6,7 @@ MC_GID_INDEX=3 \
 MC_TE_METRIC=true \
 SGLANG_MOONCAKE_TRANS_THREAD=8 \
 python -m sglang.launch_server \
-    --model-path /artesia-workspace/models/Qwen3-32B \
+    --model-path /artesia-workspace/models/GLM-4.7 \
     --host 0.0.0.0 \
     --port 30000 \
     --tp-size 4 \

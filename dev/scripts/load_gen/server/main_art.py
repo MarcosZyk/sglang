@@ -55,13 +55,16 @@ def _resolve_result_dir(path_value: Optional[str]) -> Path:
 
 
 RESULT_DIR = _resolve_result_dir(os.getenv("LOAD_GEN_RESULT_DIR"))
+DEFAULT_MAX_CONCURRENT = 32
+DEFAULT_HTTP_LIMIT_CONCURRENCY = 500
+MAX_CONCURRENT_ENV = "LOAD_GEN_SERVER_MAX_CONCURRENT"
 
 SPECIAL_TASK_KEYWORDS = ["iFlow CLI"]
 
 # ========== 关键优化：线程池 ==========
 # 用于并发执行多个请求（每个请求内部保持顺序）
 request_executor = ThreadPoolExecutor(
-    max_workers=32,  # 根据 GPU 能力调整，支持 32 个并发请求
+    max_workers=int(os.getenv(MAX_CONCURRENT_ENV, str(DEFAULT_MAX_CONCURRENT))),
     thread_name_prefix="request_worker"
 )
 
@@ -76,6 +79,7 @@ _tokenizer_cache: Dict[str, AutoTokenizer] = {}
 _tokenizer_lock = asyncio.Lock()
 _agent_id_lock = threading.Lock()
 _next_agent_id: Optional[int] = None
+_cancel_support_requests = threading.Event()
 
 
 # ========== Pydantic 请求模型 ==========
@@ -94,6 +98,7 @@ class SimRequest(BaseModel):
     temperature: Optional[float] = 0.0
     task_type_list: Optional[List[str]] = None
     semantic_type_list: Optional[List[Optional[List[str]]]] = None
+    record_result: bool = True
 
 
 # ========== Helper Functions ==========
@@ -480,7 +485,13 @@ def simulate_sync(req_dict: Dict) -> Dict:
     contextcake_client: Optional[ContextCakeHttpClient] = None
     RESULT_DIR.mkdir(parents=True, exist_ok=True)
 
-    with open(RESULT_DIR / f"{agent_id}.csv", "a", newline="", encoding="utf-8") as file:
+    result_path = RESULT_DIR / f"{agent_id}.csv"
+    result_file = (
+        open(result_path, "a", newline="", encoding="utf-8")
+        if req_dict.get("record_result", True)
+        else open(os.devnull, "w", newline="", encoding="utf-8")
+    )
+    with result_file as file:
         csv_writer = csv.writer(file)
         csv_writer.writerow([
             "context_id",
@@ -498,6 +509,12 @@ def simulate_sync(req_dict: Dict) -> Dict:
 
         # 从字典重建 SimRequest 对象
         req = SimRequest(**req_dict)
+        if not req.record_result and _cancel_support_requests.is_set():
+            return {
+                "cancelled": True,
+                "history_rounds_by_context": {},
+                "processing_time_s": time.perf_counter() - start_time,
+            }
 
         # ========== 原有验证逻辑（保持不变） ==========
         if req.n <= 0:
@@ -565,6 +582,10 @@ def simulate_sync(req_dict: Dict) -> Dict:
         try:
             # ========== 主循环 - 保持顺序执行 ==========
             for i in range(n):
+                if not req.record_result and _cancel_support_requests.is_set():
+                    logger.info("agent_id %s support request cancelled", agent_id)
+                    break
+
                 m = m_list[i]
                 task_type = req.task_list[i]
                 context_cache_id = resolve_context_cache_id(
@@ -734,6 +755,10 @@ def simulate_sync(req_dict: Dict) -> Dict:
                 ]
                 csv_writer.writerow(write_result)
 
+                if not req.record_result and _cancel_support_requests.is_set():
+                    logger.info("agent_id %s support request cancelled", agent_id)
+                    break
+
                 if current_wait_time > 0:
                     time.sleep(current_wait_time)
 
@@ -771,6 +796,13 @@ async def process_request(req: SimRequest):
     #print(f"Recv Req at: {time.time()}", flush=True)
 
     try:
+        if not req.record_result:
+            request_executor.submit(simulate_sync, req.model_dump())
+            return ORJSONResponse(
+                content={"status": "accepted", "record_result": False},
+                status_code=202,
+            )
+
         # 关键：使用线程池执行同步的 simulate_sync 函数
         result = await loop.run_in_executor(
             request_executor,  # 使用请求线程池
@@ -797,6 +829,18 @@ async def get_stats():
     })
 
 
+@app.post("/api/support/reset")
+async def reset_support_cancellation():
+    _cancel_support_requests.clear()
+    return ORJSONResponse(content={"support_requests_cancelled": False})
+
+
+@app.post("/api/support/cancel")
+async def cancel_support_requests():
+    _cancel_support_requests.set()
+    return ORJSONResponse(content={"support_requests_cancelled": True})
+
+
 @app.get("/api/health")
 async def health_check():
     """健康检查"""
@@ -816,14 +860,19 @@ async def root():
 def run_server(
     host: str = "0.0.0.0",
     port: int = 12306,
-    workers: int = 1,
-    max_concurrent: Optional[int] = None,
+    max_concurrent: int = DEFAULT_MAX_CONCURRENT,
+    http_limit_concurrency: int = DEFAULT_HTTP_LIMIT_CONCURRENCY,
     work_delay: Optional[float] = None,
     contextcake_base_url: Optional[str] = None,
     result_dir: Optional[str] = None,
 ):
     """启动服务器"""
-    del max_concurrent, work_delay
+    del work_delay
+    if max_concurrent <= 0:
+        raise ValueError("max_concurrent must be > 0")
+    if http_limit_concurrency <= 0:
+        raise ValueError("http_limit_concurrency must be > 0")
+    os.environ[MAX_CONCURRENT_ENV] = str(max_concurrent)
     if contextcake_base_url is not None:
         set_contextcake_base_url(contextcake_base_url)
     if result_dir is not None:
@@ -833,12 +882,12 @@ def run_server(
         "main_art:app",
         host=host,
         port=port,
-        workers=workers,
+        workers=1,
         loop="asyncio",
         http="httptools",
         log_level="info",
         access_log=False,
-        limit_concurrency=500,
+        limit_concurrency=http_limit_concurrency,
         backlog=2048,
         timeout_keep_alive=18000,
     )
@@ -848,7 +897,25 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=12309)
-    parser.add_argument("--workers", type=int, default=1, help="Number of uvicorn workers")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        choices=[1],
+        default=1,
+        help="Uvicorn worker count; fixed at 1",
+    )
+    parser.add_argument(
+        "--max-concurrent",
+        type=int,
+        default=DEFAULT_MAX_CONCURRENT,
+        help="Maximum number of agent requests executed concurrently",
+    )
+    parser.add_argument(
+        "--http-limit-concurrency",
+        type=int,
+        default=DEFAULT_HTTP_LIMIT_CONCURRENCY,
+        help="Uvicorn HTTP concurrency limit",
+    )
     parser.add_argument(
         "--contextcake-base-url",
         default=get_contextcake_base_url(),
@@ -864,7 +931,8 @@ if __name__ == "__main__":
     run_server(
         host=args.host,
         port=args.port,
-        workers=args.workers,
+        max_concurrent=args.max_concurrent,
+        http_limit_concurrency=args.http_limit_concurrency,
         contextcake_base_url=args.contextcake_base_url,
         result_dir=args.result_dir,
     )

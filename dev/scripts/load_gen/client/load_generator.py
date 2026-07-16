@@ -46,6 +46,7 @@ class SimRequest(BaseModel):
     temperature: Optional[float] = 0.0
     task_type_list: Optional[List[str]] = None
     semantic_type_list: Optional[List[Optional[List[str]]]] = None
+    record_result: bool = True
 
 
 @dataclass
@@ -183,14 +184,30 @@ class LoadGenerator:
     
     def __init__(self, server_url: str = "http://localhost:12306",
                  rps: float = 100.0, total_requests: int = 1000,
+                 recorded_requests: int = 60,
+                 max_concurrent: int = 100,
+                 support_submit_workers: int = 8,
                  timeout: float = 36000.0, warmup_requests: int = 0,
                  sim_config: Optional[Dict] = None,
                  sim_configs: Optional[List[Dict]] = None,
                  payload_indices: Optional[List[int]] = None,
                  payload_labels: Optional[List[str]] = None):
+        if total_requests <= 0:
+            raise ValueError("total_requests must be > 0")
+        if recorded_requests <= 0:
+            raise ValueError("recorded_requests must be > 0")
+        if rps <= 0:
+            raise ValueError("rps must be > 0")
+        if max_concurrent <= 0:
+            raise ValueError("max_concurrent must be > 0")
+        if support_submit_workers <= 0:
+            raise ValueError("support_submit_workers must be > 0")
         self.server_url = server_url
         self.rps = rps
         self.total_requests = total_requests
+        self.recorded_requests = min(recorded_requests, total_requests)
+        self.max_concurrent = max_concurrent
+        self.support_submit_workers = support_submit_workers
         self.timeout = timeout
         self.warmup_requests = warmup_requests
         if sim_configs is None:
@@ -216,6 +233,9 @@ class LoadGenerator:
         self.stats = LoadTestStats()
         self.stats.target_rps = rps
         self._stop_flag = threading.Event()
+        self._recorded_done = threading.Event()
+        self._recorded_completed = 0
+        self._support_submitted = 0
         self._results: List[RequestResult] = []
         self._results_lock = threading.Lock()
         
@@ -226,9 +246,10 @@ class LoadGenerator:
         """创建优化的 HTTP 会话"""
         session = requests.Session()
         retry = Retry(total=0, backoff_factor=0, status_forcelist=[])
+        pool_size = self.max_concurrent + self.support_submit_workers
         adapter = HTTPAdapter(
-            pool_connections=100,
-            pool_maxsize=100,
+            pool_connections=pool_size,
+            pool_maxsize=pool_size,
             max_retries=retry,
             pool_block=False
         )
@@ -245,19 +266,20 @@ class LoadGenerator:
     def _send_request(self, request_id: int) -> RequestResult:
         """发送单个 SimRequest（同步）"""
         start_time = time.perf_counter()
-        
+
         # 生成 SimRequest 数据
-        sim_data = self._get_sim_config(request_id)
-        
+        sim_data = dict(self._get_sim_config(request_id))
+        sim_data["record_result"] = True
+
         try:
             response = self.session.post(
                 f"{self.server_url}/api/process",
                 json=sim_data,
                 timeout=self.timeout
             )
-            
+
             response_time = (time.perf_counter() - start_time) * 1000
-            
+
             if response.status_code == 200:
                 data = response.json()
                 return RequestResult(
@@ -296,24 +318,77 @@ class LoadGenerator:
                 total_messages=0,
                 error=str(e)
             )
+
+    def _send_support_request(self, request_id: int) -> None:
+        """Submit an unrecorded request that only maintains server/cache pressure."""
+        sim_data = dict(self._get_sim_config(request_id))
+        sim_data["record_result"] = False
+        try:
+            response = self.session.post(
+                f"{self.server_url}/api/process",
+                json=sim_data,
+                # The server returns 202 as soon as the support work is queued.
+                timeout=5,
+            )
+            if response.status_code not in (200, 202):
+                logger.warning(
+                    "Support request %s was rejected with HTTP %s",
+                    request_id,
+                    response.status_code,
+                )
+            else:
+                with self._results_lock:
+                    self._support_submitted += 1
+        except Exception as exc:
+            logger.warning("Support request %s failed to submit: %s", request_id, exc)
+
+    def _set_support_cancellation(self, cancel: bool) -> None:
+        action = "cancel" if cancel else "reset"
+        try:
+            response = self.session.post(
+                f"{self.server_url}/api/support/{action}",
+                timeout=5,
+            )
+            if response.status_code != 200:
+                logger.warning(
+                    "Could not %s support requests: HTTP %s",
+                    action,
+                    response.status_code,
+                )
+        except Exception as exc:
+            logger.warning("Could not %s support requests: %s", action, exc)
     
     def _worker(self, request_id: int):
-        """工作线程"""
+        """Execute and record a measured request."""
         self.token_bucket.acquire()
         result = self._send_request(request_id)
         
         with self._results_lock:
             self.stats.add_result(result)
             self._results.append(result)
+            self._recorded_completed += 1
+            completed = self._recorded_completed
+            if completed >= self.recorded_requests:
+                self._recorded_done.set()
         
-        if request_id % max(1, self.total_requests // 10) == 0:
+        if completed % max(1, self.recorded_requests // 10) == 0:
             elapsed = time.time() - self.stats.start_time
-            current_rps = request_id / max(elapsed, 0.001)
-            logger.info(f"Progress: {request_id}/{self.total_requests} ({current_rps:.1f} RPS)")
+            current_rps = completed / max(elapsed, 0.001)
+            logger.info(
+                "Recorded progress: %s/%s (%.1f RPS)",
+                completed,
+                self.recorded_requests,
+                current_rps,
+            )
     
     def run(self) -> LoadTestStats:
         """运行负载测试"""
-        logger.info(f"Starting load test: {self.total_requests} requests at {self.rps} RPS")
+        logger.info(
+            "Starting load test: up to %s requests at %s RPS; record first %s",
+            self.total_requests,
+            self.rps,
+            self.recorded_requests,
+        )
         logger.info(f"Target server: {self.server_url}")
         if len(self.sim_configs) == 1:
             logger.info(
@@ -338,6 +413,9 @@ class LoadGenerator:
         self.stats.target_rps = self.rps
         self.stats.start_time = time.time()
         self._results = []
+        self._recorded_completed = 0
+        self._support_submitted = 0
+        self._recorded_done.clear()
         
         # 预热
         if self.warmup_requests > 0:
@@ -359,23 +437,41 @@ class LoadGenerator:
             self.session.post(f"{self.server_url}/api/stats/reset", timeout=5)
         except:
             pass
+        self._set_support_cancellation(cancel=False)
         
-        max_workers = min(100, max(32, int(self.rps * 2)))
-        logger.info(f"Using {max_workers} worker threads")
+        logger.info(
+            "Using %s recorded-request workers and %s support-submit workers",
+            self.max_concurrent,
+            self.support_submit_workers,
+        )
         
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = []
+        recorded_executor = ThreadPoolExecutor(max_workers=self.max_concurrent)
+        support_executor = ThreadPoolExecutor(
+            max_workers=self.support_submit_workers
+        )
+        recorded_futures = []
+        try:
             for i in range(self.total_requests):
-                if self._stop_flag.is_set():
+                if self._stop_flag.is_set() or self._recorded_done.is_set():
                     break
-                futures.append(executor.submit(self._worker, i))
-                time.sleep(1/self.rps)
-            
-            for future in as_completed(futures):
+
+                if i < self.recorded_requests:
+                    recorded_futures.append(recorded_executor.submit(self._worker, i))
+                else:
+                    support_executor.submit(self._send_support_request, i)
+
+                # Wake up early when the last recorded request completes.
+                self._recorded_done.wait(timeout=1 / self.rps)
+
+            for future in as_completed(recorded_futures):
                 try:
                     future.result()
                 except Exception as e:
                     logger.error(f"Worker error: {e}")
+        finally:
+            self._set_support_cancellation(cancel=True)
+            recorded_executor.shutdown(wait=True)
+            support_executor.shutdown(wait=False, cancel_futures=True)
 
         
         self.stats.calculate_metrics()
@@ -391,6 +487,11 @@ class LoadGenerator:
             logger.warning(f"Could not get server stats: {e}")
         
         elapsed = time.time() - self.stats.start_time
+        logger.info(
+            "Recorded requests completed: %s; support requests submitted: %s",
+            self._recorded_completed,
+            self._support_submitted,
+        )
         logger.info(f"Load test completed in {elapsed:.2f} seconds")
         
         return self.stats
@@ -500,6 +601,9 @@ def build_payload_indices(
 
 def run_client(server_url: str = "http://localhost:12306",
                rps: float = 100.0, total_requests: int = 1000,
+               recorded_requests: int = 60,
+               max_concurrent: int = 100,
+               support_submit_workers: int = 8,
                model_name: str = None, json_file: Optional[str] = None,
                json_file_a: Optional[str] = None,
                json_file_b: Optional[str] = None,
@@ -514,6 +618,9 @@ def run_client(server_url: str = "http://localhost:12306",
             server_url=server_url,
             rps=rps,
             total_requests=total_requests,
+            recorded_requests=recorded_requests,
+            max_concurrent=max_concurrent,
+            support_submit_workers=support_submit_workers,
             sim_config=sim_config,
         )
     else:
@@ -541,6 +648,9 @@ def run_client(server_url: str = "http://localhost:12306",
             server_url=server_url,
             rps=rps,
             total_requests=total_requests,
+            recorded_requests=recorded_requests,
+            max_concurrent=max_concurrent,
+            support_submit_workers=support_submit_workers,
             sim_configs=sim_configs,
             payload_indices=payload_indices,
             payload_labels=[str(payload_json_a), str(payload_json_b)],
@@ -556,11 +666,32 @@ if __name__ == "__main__":
     parser.add_argument("--url", default="http://localhost:12309", help="Server URL")
     parser.add_argument("--rps", type=float, default=100.0, help="Requests per second")
     parser.add_argument("--requests", type=int, default=1000, help="Total requests")
+    parser.add_argument(
+        "--recorded-requests",
+        type=int,
+        default=60,
+        help=(
+            "Number of initial requests to record and wait for. Remaining requests "
+            "only maintain pressure; the client exits when all recorded requests finish."
+        ),
+    )
+    parser.add_argument(
+        "--max-concurrent",
+        type=int,
+        default=100,
+        help="Maximum number of recorded requests executed concurrently",
+    )
+    parser.add_argument(
+        "--support-submit-workers",
+        type=int,
+        default=8,
+        help="Worker threads used to submit unrecorded pressure requests",
+    )
     parser.add_argument("--sim-n", type=int, default=10, help="SimRequest n value")
     parser.add_argument("--sim-n-task", type=int, default=3, help="SimRequest n_task value")
     parser.add_argument(
         '--model',
-        default='/artesia-workspace/models/Qwen3-32B',
+        default='/artesia-workspace/models/GLM-4.7',
         type=str,
     )
     parser.add_argument(
@@ -594,6 +725,9 @@ if __name__ == "__main__":
         server_url=args.url,
         rps=args.rps,
         total_requests=args.requests,
+        recorded_requests=args.recorded_requests,
+        max_concurrent=args.max_concurrent,
+        support_submit_workers=args.support_submit_workers,
         model_name=args.model,
         json_file=args.json_file,
         json_file_a=args.json_file_a,
