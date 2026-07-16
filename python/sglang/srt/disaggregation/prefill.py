@@ -286,6 +286,9 @@ class SchedulerDisaggregationPrefillMixin:
             if batch:
                 # Aggregate batch-level artesia load_kv time
                 batch_load_kv_total = sum(req.load_kv_elapsed for req in batch.reqs)
+                # This is a one-shot value; do not charge it again in later chunks.
+                for req in batch.reqs:
+                    req.load_kv_elapsed = 0.0
                 if batch_load_kv_total > 0:
                     for req in batch.reqs:
                         req.artesia_time += batch_load_kv_total
