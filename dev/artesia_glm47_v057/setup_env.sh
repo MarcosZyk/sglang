@@ -55,6 +55,7 @@ UV_INSTALL=(
 # the Torch version in this venv. Do not use editable mode for the kernel:
 # editable builds would overwrite the .so files used by the legacy environment.
 "${UV_INSTALL[@]}" "${ARTESIA_ROOT}/python"
+"${UV_INSTALL[@]}" -e "${ARTESIA_ROOT}/context-cake"
 TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" MAX_JOBS="${MAX_JOBS}" \
     "${UV_INSTALL[@]}" \
     --no-build-isolation \

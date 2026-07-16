@@ -22,6 +22,7 @@ expected = {
     "sgl-kernel": "0.3.20",
     "flashinfer-python": "0.5.3",
     "mooncake-transfer-engine": "0.3.8",
+    "context-cake": "0.2.0",
 }
 
 for package, expected_version in expected.items():
