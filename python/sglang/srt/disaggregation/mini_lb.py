@@ -62,10 +62,26 @@ class PDRegistryRequest:
 
 
 class MiniLoadBalancer:
-    def __init__(self, prefill_configs: List[PrefillConfig], decode_servers: List[str]):
+    def __init__(
+        self,
+        prefill_configs: List[PrefillConfig],
+        decode_servers: List[str],
+        decode_selection_policy: str = "random",
+    ):
+        if decode_selection_policy not in ("random", "least-inflight"):
+            raise ValueError(
+                "decode_selection_policy must be either 'random' or 'least-inflight'"
+            )
         self.prefill_configs = prefill_configs
         self.prefill_servers = [p.url for p in prefill_configs]
         self.decode_servers = decode_servers
+        self.decode_selection_policy = decode_selection_policy
+        # Count one inflight item per LLM HTTP inference. The counter is
+        # incremented when a decode server is selected and decremented as soon
+        # as that inference finishes (or fails), independently of the lifetime
+        # of the calling agent request.
+        self.decode_inflight = {server: 0 for server in decode_servers}
+        self._decode_tiebreaker = 0
 
     def add_prefill_server(self, new_prefill_config: PrefillConfig):
         self.prefill_configs.append(new_prefill_config)
@@ -73,6 +89,52 @@ class MiniLoadBalancer:
 
     def add_decode_server(self, new_decode_server: str):
         self.decode_servers.append(new_decode_server)
+        self.decode_inflight.setdefault(new_decode_server, 0)
+
+    def acquire_decode_server(self):
+        assert len(self.decode_servers) > 0, "No decode servers available"
+
+        if self.decode_selection_policy == "least-inflight":
+            min_inflight = min(
+                self.decode_inflight[server] for server in self.decode_servers
+            )
+            candidates = [
+                server
+                for server in self.decode_servers
+                if self.decode_inflight[server] == min_inflight
+            ]
+            decode_server = candidates[self._decode_tiebreaker % len(candidates)]
+            self._decode_tiebreaker += 1
+        else:
+            decode_server = random.choice(self.decode_servers)
+        self.decode_inflight[decode_server] += 1
+        logger.info(
+            "Selected decode server %s using %s; inflight=%s",
+            decode_server,
+            self.decode_selection_policy,
+            self.decode_inflight,
+        )
+        return decode_server
+
+    def release_decode_server(self, decode_server: str):
+        inflight = self.decode_inflight.get(decode_server)
+        if inflight is None:
+            logger.warning(
+                "Cannot release unregistered decode server %s", decode_server
+            )
+            return
+        if inflight == 0:
+            logger.warning(
+                "Decode inflight counter is already zero for %s", decode_server
+            )
+            return
+
+        self.decode_inflight[decode_server] -= 1
+        logger.info(
+            "Released decode server %s; inflight=%s",
+            decode_server,
+            self.decode_inflight,
+        )
 
     def select_pair(self):
         # TODO: return some message instead of panic
@@ -80,126 +142,139 @@ class MiniLoadBalancer:
         assert len(self.decode_servers) > 0, "No decode servers available"
 
         prefill_config = random.choice(self.prefill_configs)
-        decode_server = random.choice(self.decode_servers)
+        decode_server = self.acquire_decode_server()
         return prefill_config.url, prefill_config.bootstrap_port, decode_server
 
     async def generate(
         self, modified_request, prefill_server, decode_server, endpoint
     ) -> ORJSONResponse:
-        assert endpoint[0] != "/", f"Endpoint should not start with '/': {endpoint}"
-
-        async with aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(
-                total=3600
-            )  # Add timeout for request reliability
-        ) as session:
-            tasks = [
-                session.post(f"{prefill_server}/{endpoint}", json=modified_request),
-                session.post(f"{decode_server}/{endpoint}", json=modified_request),
-            ]
-
-            # Wait for both responses to complete. Prefill should end first.
-            prefill_response, decode_response = await asyncio.gather(*tasks)
-
-            if modified_request.get("return_logprob", False):
-
-                prefill_json = await prefill_response.json()
-                ret_json = await decode_response.json()
-
-                # merge `meta_info.input_token_logprobs` from prefill to decode
-                if "meta_info" in ret_json:
-                    if "input_token_logprobs" in ret_json["meta_info"]:
-                        ret_json["meta_info"]["input_token_logprobs"] = (
-                            prefill_json["meta_info"]["input_token_logprobs"]
-                            + ret_json["meta_info"]["input_token_logprobs"]
-                        )
-            else:
-                ret_json = await decode_response.json()
-                prefill_json = await prefill_response.json()
-
-            ret_json["num_local_cache"] = prefill_json.get("num_local_cache", 0)
-            ret_json["num_global_cache"] = prefill_json.get("num_global_cache", 0)
-            ret_json["prefill_time"] = ret_json.get(
-                "prefill_time", 0
-            ) + prefill_json.get("prefill_time", 0)
-            ret_json["artesia_time"] = ret_json.get(
-                "artesia_time", 0
-            ) + prefill_json.get("artesia_time", 0)
-
-            prefill_prompt_details = prefill_json.get("usage", {}).get(
-                "prompt_tokens_details"
-            )
-            cached_tokens = (
-                prefill_prompt_details.get("cached_tokens", 0)
-                if prefill_prompt_details
-                else 0
-            )
-            ret_usage = ret_json.setdefault("usage", {})
-            ret_prompt_details = ret_usage.get("prompt_tokens_details")
-            if not isinstance(ret_prompt_details, dict):
-                ret_prompt_details = {}
-                ret_usage["prompt_tokens_details"] = ret_prompt_details
-            ret_prompt_details["cached_tokens"] = cached_tokens
-
-            return ORJSONResponse(
-                content=ret_json,
-                status_code=decode_response.status,
-            )
-
-    async def generate_stream(
-        self, modified_request, prefill_server, decode_server, endpoint="generate"
-    ):
-        assert endpoint[0] != "/", f"Endpoint should not start with '/': {endpoint}"
-
-        async def stream_results():
+        try:
+            assert endpoint[0] != "/", f"Endpoint should not start with '/': {endpoint}"
             async with aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(
                     total=3600
                 )  # Add timeout for request reliability
             ) as session:
-                # Create the tasks for both prefill and decode requests
                 tasks = [
                     session.post(f"{prefill_server}/{endpoint}", json=modified_request),
                     session.post(f"{decode_server}/{endpoint}", json=modified_request),
                 ]
-                # Wait for both responses to complete. Since this is streaming, they return immediately.
+
+                # Wait for both responses to complete. Prefill should end first.
                 prefill_response, decode_response = await asyncio.gather(*tasks)
 
                 if modified_request.get("return_logprob", False):
-                    prefill_chunks = []
-                    async for chunk in prefill_response.content:
-                        prefill_chunks.append(chunk)
 
-                    first_prefill_chunk = (
-                        prefill_chunks[0].decode("utf-8")[5:].strip("\n")
-                    )
-                    first_prefill_chunk_json = orjson.loads(first_prefill_chunk)
+                    prefill_json = await prefill_response.json()
+                    ret_json = await decode_response.json()
 
-                    async for chunk in decode_response.content:
-                        # Note: This is inefficient
-                        # merge prefill input_token_logprobs, output_token_logprobs to decode
-                        decoded_chunk = chunk.decode("utf-8")
-                        if (
-                            decoded_chunk
-                            and decoded_chunk.startswith("data:")
-                            and "[DONE]" not in decoded_chunk
-                        ):
-                            ret_json = orjson.loads(decoded_chunk[5:].strip("\n"))
+                    # merge `meta_info.input_token_logprobs` from prefill to decode
+                    if "meta_info" in ret_json:
+                        if "input_token_logprobs" in ret_json["meta_info"]:
                             ret_json["meta_info"]["input_token_logprobs"] = (
-                                first_prefill_chunk_json["meta_info"][
-                                    "input_token_logprobs"
-                                ]
+                                prefill_json["meta_info"]["input_token_logprobs"]
                                 + ret_json["meta_info"]["input_token_logprobs"]
                             )
-
-                            yield b"data: " + orjson.dumps(ret_json) + b"\n\n"
-                        else:
-                            yield chunk
                 else:
-                    async for chunk in decode_response.content.iter_chunked(
-                        AIOHTTP_STREAM_READ_CHUNK_SIZE
-                    ):
-                        yield chunk
+                    ret_json = await decode_response.json()
+                    prefill_json = await prefill_response.json()
+
+                ret_json["num_local_cache"] = prefill_json.get("num_local_cache", 0)
+                ret_json["num_global_cache"] = prefill_json.get("num_global_cache", 0)
+                ret_json["prefill_time"] = ret_json.get(
+                    "prefill_time", 0
+                ) + prefill_json.get("prefill_time", 0)
+                ret_json["artesia_time"] = ret_json.get(
+                    "artesia_time", 0
+                ) + prefill_json.get("artesia_time", 0)
+
+                prefill_prompt_details = prefill_json.get("usage", {}).get(
+                    "prompt_tokens_details"
+                )
+                cached_tokens = (
+                    prefill_prompt_details.get("cached_tokens", 0)
+                    if prefill_prompt_details
+                    else 0
+                )
+                ret_usage = ret_json.setdefault("usage", {})
+                ret_prompt_details = ret_usage.get("prompt_tokens_details")
+                if not isinstance(ret_prompt_details, dict):
+                    ret_prompt_details = {}
+                    ret_usage["prompt_tokens_details"] = ret_prompt_details
+                ret_prompt_details["cached_tokens"] = cached_tokens
+
+                return ORJSONResponse(
+                    content=ret_json,
+                    status_code=decode_response.status,
+                )
+        finally:
+            self.release_decode_server(decode_server)
+
+    async def generate_stream(
+        self, modified_request, prefill_server, decode_server, endpoint="generate"
+    ):
+        try:
+            assert endpoint[0] != "/", f"Endpoint should not start with '/': {endpoint}"
+        except Exception:
+            self.release_decode_server(decode_server)
+            raise
+
+        async def stream_results():
+            try:
+                async with aiohttp.ClientSession(
+                    timeout=aiohttp.ClientTimeout(
+                        total=3600
+                    )  # Add timeout for request reliability
+                ) as session:
+                    # Create the tasks for both prefill and decode requests
+                    tasks = [
+                        session.post(
+                            f"{prefill_server}/{endpoint}", json=modified_request
+                        ),
+                        session.post(
+                            f"{decode_server}/{endpoint}", json=modified_request
+                        ),
+                    ]
+                    # Wait for both responses to complete. Since this is streaming, they return immediately.
+                    prefill_response, decode_response = await asyncio.gather(*tasks)
+
+                    if modified_request.get("return_logprob", False):
+                        prefill_chunks = []
+                        async for chunk in prefill_response.content:
+                            prefill_chunks.append(chunk)
+
+                        first_prefill_chunk = (
+                            prefill_chunks[0].decode("utf-8")[5:].strip("\n")
+                        )
+                        first_prefill_chunk_json = orjson.loads(first_prefill_chunk)
+
+                        async for chunk in decode_response.content:
+                            # Note: This is inefficient
+                            # merge prefill input_token_logprobs, output_token_logprobs to decode
+                            decoded_chunk = chunk.decode("utf-8")
+                            if (
+                                decoded_chunk
+                                and decoded_chunk.startswith("data:")
+                                and "[DONE]" not in decoded_chunk
+                            ):
+                                ret_json = orjson.loads(decoded_chunk[5:].strip("\n"))
+                                ret_json["meta_info"]["input_token_logprobs"] = (
+                                    first_prefill_chunk_json["meta_info"][
+                                        "input_token_logprobs"
+                                    ]
+                                    + ret_json["meta_info"]["input_token_logprobs"]
+                                )
+
+                                yield b"data: " + orjson.dumps(ret_json) + b"\n\n"
+                            else:
+                                yield chunk
+                    else:
+                        async for chunk in decode_response.content.iter_chunked(
+                            AIOHTTP_STREAM_READ_CHUNK_SIZE
+                        ):
+                            yield chunk
+            finally:
+                self.release_decode_server(decode_server)
 
         return StreamingResponse(
             stream_results(),
@@ -307,30 +382,34 @@ async def get_model_info():
 async def handle_generate_request(request_data: dict):
     prefill_server, bootstrap_port, decode_server = load_balancer.select_pair()
 
-    # Parse and transform prefill_server for bootstrap data
-    parsed_url = urllib.parse.urlparse(prefill_server)
-    hostname = parsed_url.hostname
-    modified_request = request_data.copy()
+    try:
+        # Parse and transform prefill_server for bootstrap data
+        parsed_url = urllib.parse.urlparse(prefill_server)
+        hostname = parsed_url.hostname
+        modified_request = request_data.copy()
 
-    batch_size = _get_request_batch_size(modified_request)
-    if batch_size is not None:
-        modified_request.update(
-            {
-                "bootstrap_host": [hostname] * batch_size,
-                "bootstrap_port": [bootstrap_port] * batch_size,
-                "bootstrap_room": [
-                    _generate_bootstrap_room() for _ in range(batch_size)
-                ],
-            }
-        )
-    else:
-        modified_request.update(
-            {
-                "bootstrap_host": hostname,
-                "bootstrap_port": bootstrap_port,
-                "bootstrap_room": _generate_bootstrap_room(),
-            }
-        )
+        batch_size = _get_request_batch_size(modified_request)
+        if batch_size is not None:
+            modified_request.update(
+                {
+                    "bootstrap_host": [hostname] * batch_size,
+                    "bootstrap_port": [bootstrap_port] * batch_size,
+                    "bootstrap_room": [
+                        _generate_bootstrap_room() for _ in range(batch_size)
+                    ],
+                }
+            )
+        else:
+            modified_request.update(
+                {
+                    "bootstrap_host": hostname,
+                    "bootstrap_port": bootstrap_port,
+                    "bootstrap_room": _generate_bootstrap_room(),
+                }
+            )
+    except Exception:
+        load_balancer.release_decode_server(decode_server)
+        raise
 
     if request_data.get("stream", False):
         return await load_balancer.generate_stream(
@@ -345,17 +424,21 @@ async def handle_generate_request(request_data: dict):
 async def _forward_to_backend(request_data: dict, endpoint_name: str):
     prefill_server, bootstrap_port, decode_server = load_balancer.select_pair()
 
-    # Parse and transform prefill_server for bootstrap data
-    parsed_url = urllib.parse.urlparse(prefill_server)
-    hostname = parsed_url.hostname
-    modified_request = request_data.copy()
-    modified_request.update(
-        {
-            "bootstrap_host": hostname,
-            "bootstrap_port": bootstrap_port,
-            "bootstrap_room": _generate_bootstrap_room(),
-        }
-    )
+    try:
+        # Parse and transform prefill_server for bootstrap data
+        parsed_url = urllib.parse.urlparse(prefill_server)
+        hostname = parsed_url.hostname
+        modified_request = request_data.copy()
+        modified_request.update(
+            {
+                "bootstrap_host": hostname,
+                "bootstrap_port": bootstrap_port,
+                "bootstrap_room": _generate_bootstrap_room(),
+            }
+        )
+    except Exception:
+        load_balancer.release_decode_server(decode_server)
+        raise
 
     if request_data.get("stream", False):
         return await load_balancer.generate_stream(
@@ -438,9 +521,20 @@ async def register(obj: PDRegistryRequest):
     return Response(status_code=200)
 
 
-def run(prefill_configs, decode_addrs, host, port):
+def run(
+    prefill_configs,
+    decode_addrs,
+    host,
+    port,
+    decode_selection_policy="random",
+):
     global load_balancer
-    load_balancer = MiniLoadBalancer(prefill_configs, decode_addrs)
+    load_balancer = MiniLoadBalancer(
+        prefill_configs,
+        decode_addrs,
+        decode_selection_policy=decode_selection_policy,
+    )
+    logger.info("Decode selection policy: %s", decode_selection_policy)
     uvicorn.run(app, host=host, port=port)
 
 
@@ -455,6 +549,12 @@ if __name__ == "__main__":
     parser.add_argument("--prefill-bootstrap-ports", type=int, nargs="+")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument(
+        "--decode-selection-policy",
+        choices=("random", "least-inflight"),
+        default="random",
+        help="Decode server selection policy (default: random)",
+    )
     args = parser.parse_args()
 
     bootstrap_ports = args.prefill_bootstrap_ports or [None] * len(args.prefill)
@@ -473,4 +573,5 @@ if __name__ == "__main__":
         args.decode,
         args.host,
         args.port,
+        args.decode_selection_policy,
     )
