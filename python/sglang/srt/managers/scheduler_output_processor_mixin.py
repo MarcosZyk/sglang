@@ -51,14 +51,27 @@ class SchedulerOutputProcessorMixin:
         """Start the custom batch trace before scheduling/cache lookup."""
         self.device_module.synchronize()
         self.start_exe_time = time.perf_counter()
+        self.artesia_load_kv_elapsed_at_batch_start = getattr(
+            self.tree_cache, "total_load_kv_elapsed", 0.0
+        )
 
     def attach_artesia_batch_timing(self: Scheduler, batch: Optional[ScheduleBatch]):
         """Attach the start timestamp and consume Artesia load latency once."""
         if batch is None:
             return
 
+        current_total_load_kv_elapsed = getattr(
+            self.tree_cache, "total_load_kv_elapsed", 0.0
+        )
+        batch.artesia_load_kv_elapsed = max(
+            current_total_load_kv_elapsed
+            - self.artesia_load_kv_elapsed_at_batch_start,
+            0.0,
+        )
+
         batch_load_kv_total = sum(req.load_kv_elapsed for req in batch.reqs)
         for req in batch.reqs:
+            req.attributed_prefill_time += req.load_kv_elapsed
             req.load_kv_elapsed = 0.0
             req.push_to_model_runner_time.append(self.start_exe_time)
         if batch_load_kv_total > 0:
@@ -92,7 +105,9 @@ class SchedulerOutputProcessorMixin:
 
         if prefill_reqs:
             attributed_times = calculate_attributed_prefill_times(
-                prefill_reqs[0][1], [item[2] for item in prefill_reqs]
+                prefill_reqs[0][1],
+                [item[2] for item in prefill_reqs],
+                batch.artesia_load_kv_elapsed,
             )
             if attributed_times is None:
                 logger.warning(
@@ -107,15 +122,17 @@ class SchedulerOutputProcessorMixin:
 
     def consume_artesia_offload_timing(self: Scheduler, reqs: List[Req]) -> float:
         """Charge a blocking batch's total offload latency exactly once."""
-        batch_offload_total = sum(req.offload_kv_elapsed for req in reqs)
-        for req in reqs:
+        req_offload_times = [(req, req.offload_kv_elapsed) for req in reqs]
+        batch_offload_total = sum(elapsed for _, elapsed in req_offload_times)
+        for req, _ in req_offload_times:
             req.offload_kv_elapsed = 0.0
 
         if batch_offload_total > 0:
-            for req in reqs:
+            for req, own_offload_elapsed in req_offload_times:
                 if req.finished() and not req.is_retracted:
                     req.artesia_time += batch_offload_total
                     req.prefill_time += batch_offload_total
+                    req.attributed_prefill_time += own_offload_elapsed
         return batch_offload_total
 
     def process_batch_result_prebuilt(self: Scheduler, batch: ScheduleBatch):

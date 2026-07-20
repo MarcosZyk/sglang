@@ -1250,6 +1250,9 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
     extend_num_tokens: Optional[int] = None
     decoding_reqs: List[Req] = None
     extend_logprob_start_lens: List[int] = None
+    # Artesia reads performed while this batch was being scheduled. This is
+    # subtracted from shared time before token-proportional attribution.
+    artesia_load_kv_elapsed: float = 0.0
     # It comes empty list if logprob is not required.
     extend_input_logprob_token_ids: Optional[torch.Tensor] = None
 
@@ -2179,6 +2182,8 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
             out_cache_loc=self.out_cache_loc,
             return_logprob=self.return_logprob,
             decoding_reqs=self.decoding_reqs,
+            extend_lens=self.extend_lens,
+            artesia_load_kv_elapsed=self.artesia_load_kv_elapsed,
             spec_algorithm=self.spec_algorithm,
             global_num_tokens=self.global_num_tokens,
             global_num_tokens_for_logprob=self.global_num_tokens_for_logprob,

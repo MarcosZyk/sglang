@@ -78,6 +78,7 @@ class ArtesiaRadixCache(RadixCache):
 
         self.enable_tree_log = enable_tree_log
         self.tree_log = RadixTreeLog() if enable_tree_log else None
+        self.total_load_kv_elapsed = 0.0
 
         kvcache = self.token_to_kv_pool_allocator.get_kvcache()
         if not hasattr(kvcache, "k_buffer") or not hasattr(kvcache, "v_buffer"):
@@ -180,10 +181,11 @@ class ArtesiaRadixCache(RadixCache):
         )
         torch.cuda.synchronize()
         load_kv_elapsed = time.perf_counter() - start_retrieve
+        self.total_load_kv_elapsed += load_kv_elapsed
 
         req = kwargs.get("req")
         if req is not None:
-            req.load_kv_elapsed = load_kv_elapsed
+            req.load_kv_elapsed += load_kv_elapsed
 
         fetched = min(num_retrieved, uncached_len)
         fetched -= fetched % self.page_size
