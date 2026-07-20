@@ -184,6 +184,9 @@ class MiniLoadBalancer:
                 ret_json["prefill_time"] = ret_json.get(
                     "prefill_time", 0
                 ) + prefill_json.get("prefill_time", 0)
+                ret_json["attributed_prefill_time"] = ret_json.get(
+                    "attributed_prefill_time", 0
+                ) + prefill_json.get("attributed_prefill_time", 0)
                 ret_json["artesia_time"] = ret_json.get(
                     "artesia_time", 0
                 ) + prefill_json.get("artesia_time", 0)

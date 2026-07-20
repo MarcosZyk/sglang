@@ -749,6 +749,7 @@ class Req:
         self.task_id = task_id
         self.call_id = call_id
         self.prefill_time: float = 0.0
+        self.attributed_prefill_time: float = 0.0
         self.artesia_time: float = 0.0
         self.load_kv_elapsed: float = 0.0
         self.offload_kv_elapsed: float = 0.0

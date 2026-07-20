@@ -15,6 +15,9 @@ from sglang.srt.managers.io_struct import (
     BatchEmbeddingOutput,
     BatchTokenIDOutput,
 )
+from sglang.srt.managers.prefill_time_attribution import (
+    calculate_attributed_prefill_times,
+)
 from sglang.srt.managers.schedule_batch import (
     BaseFinishReason,
     Req,
@@ -67,8 +70,9 @@ class SchedulerOutputProcessorMixin:
         self.device_module.synchronize()
         end_exe_time = time.perf_counter()
         decoding_reqs = set(batch.decoding_reqs or [])
+        prefill_reqs = []
 
-        for req in batch.reqs:
+        for index, req in enumerate(batch.reqs):
             if not req.push_to_model_runner_time:
                 continue
             elapsed = end_exe_time - req.push_to_model_runner_time.popleft()
@@ -78,6 +82,28 @@ class SchedulerOutputProcessorMixin:
                 req.decode_time.append(elapsed)
             else:
                 req.prefill_time += elapsed
+                extend_len = (
+                    batch.extend_lens[index]
+                    if batch.extend_lens is not None
+                    and index < len(batch.extend_lens)
+                    else 0
+                )
+                prefill_reqs.append((req, elapsed, max(int(extend_len), 0)))
+
+        if prefill_reqs:
+            attributed_times = calculate_attributed_prefill_times(
+                prefill_reqs[0][1], [item[2] for item in prefill_reqs]
+            )
+            if attributed_times is None:
+                logger.warning(
+                    "Cannot attribute prefill batch time because the batch has "
+                    "no positive extend lengths."
+                )
+            else:
+                for (req, _, _), attributed_time in zip(
+                    prefill_reqs, attributed_times
+                ):
+                    req.attributed_prefill_time += attributed_time
 
     def consume_artesia_offload_timing(self: Scheduler, reqs: List[Req]) -> float:
         """Charge a blocking batch's total offload latency exactly once."""
@@ -902,6 +928,7 @@ class SchedulerOutputProcessorMixin:
         prefill_launch_latencies = []
         prefill_finished_timestamps = []
         prefill_times = []
+        attributed_prefill_times = []
         artesia_times = []
         decode_times = []
         num_global_caches = []
@@ -1007,6 +1034,7 @@ class SchedulerOutputProcessorMixin:
                 cached_tokens.append(req.cached_tokens)
                 retraction_counts.append(req.retraction_count)
                 prefill_times.append(req.prefill_time)
+                attributed_prefill_times.append(req.attributed_prefill_time)
                 artesia_times.append(req.artesia_time)
                 decode_times.append(list(req.decode_time))
                 num_local_caches.append(req.num_local_cache)
@@ -1158,6 +1186,7 @@ class SchedulerOutputProcessorMixin:
                     retraction_counts=retraction_counts,
                     load=load,
                     prefill_times=prefill_times,
+                    attributed_prefill_times=attributed_prefill_times,
                     artesia_times=artesia_times,
                     decode_times=decode_times,
                     num_local_caches=num_local_caches,

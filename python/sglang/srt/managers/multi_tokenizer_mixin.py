@@ -194,6 +194,9 @@ def _handle_output_by_index(output, i):
                 output, "token_steps", i, check_length=False
             ),
             prefill_times=_extract_field_by_index(output, "prefill_times", i),
+            attributed_prefill_times=_extract_field_by_index(
+                output, "attributed_prefill_times", i
+            ),
             artesia_times=_extract_field_by_index(output, "artesia_times", i),
             decode_times=_extract_field_by_index(output, "decode_times", i),
             num_local_caches=_extract_field_by_index(output, "num_local_caches", i),
@@ -285,6 +288,9 @@ def _handle_output_by_index(output, i):
                 output, "token_steps", i, check_length=False
             ),
             prefill_times=_extract_field_by_index(output, "prefill_times", i),
+            attributed_prefill_times=_extract_field_by_index(
+                output, "attributed_prefill_times", i
+            ),
             artesia_times=_extract_field_by_index(output, "artesia_times", i),
             decode_times=_extract_field_by_index(output, "decode_times", i),
             num_local_caches=_extract_field_by_index(output, "num_local_caches", i),

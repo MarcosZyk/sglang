@@ -352,6 +352,7 @@ class DetokenizerManager(MultiHttpWorkerDetokenizerMixin):
             prefill_launch_latency=recv_obj.prefill_launch_latency,
             prefill_finished_ts=recv_obj.prefill_finished_ts,
             prefill_times=recv_obj.prefill_times,
+            attributed_prefill_times=recv_obj.attributed_prefill_times,
             artesia_times=recv_obj.artesia_times,
             decode_times=recv_obj.decode_times,
             num_local_caches=recv_obj.num_local_caches,

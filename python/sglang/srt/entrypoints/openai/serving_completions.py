@@ -436,6 +436,14 @@ class OpenAIServingCompletion(OpenAIServingBase):
             choices=choices,
             usage=usage,
             metadata={"weight_version": ret[0]["meta_info"]["weight_version"]},
+            prefill_time=ret[0]["meta_info"].get("prefill_time", 0.0),
+            attributed_prefill_time=ret[0]["meta_info"].get(
+                "attributed_prefill_time", 0.0
+            ),
+            artesia_time=ret[0]["meta_info"].get("artesia_time", 0.0),
+            decode_time=ret[0]["meta_info"].get("decode_time", []),
+            num_local_cache=ret[0]["meta_info"].get("num_local_cache", 0),
+            num_global_cache=ret[0]["meta_info"].get("num_global_cache", 0),
         )
 
     def _get_echo_text(self, request: CompletionRequest, index: int) -> str:

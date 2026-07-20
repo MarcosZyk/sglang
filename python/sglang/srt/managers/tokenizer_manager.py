@@ -1470,6 +1470,11 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
                 "prefill_time": (
                     recv_obj.prefill_times[i] if recv_obj.prefill_times else 0.0
                 ),
+                "attributed_prefill_time": (
+                    recv_obj.attributed_prefill_times[i]
+                    if recv_obj.attributed_prefill_times
+                    else 0.0
+                ),
                 "artesia_time": (
                     recv_obj.artesia_times[i] if recv_obj.artesia_times else 0.0
                 ),

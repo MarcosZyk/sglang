@@ -305,6 +305,7 @@ class CompletionResponse(BaseModel):
     usage: UsageInfo
     metadata: Optional[Dict[str, Any]] = None
     prefill_time: float = 0.0
+    attributed_prefill_time: float = 0.0
     artesia_time: float = 0.0
     decode_time: List[float] = Field(default_factory=list)
     num_local_cache: int = 0
@@ -742,6 +743,7 @@ class ChatCompletionResponse(BaseModel):
     usage: UsageInfo
     metadata: Optional[Dict[str, Any]] = None
     prefill_time: float = 0.0
+    attributed_prefill_time: float = 0.0
     artesia_time: float = 0.0
     decode_time: List[float] = Field(default_factory=list)
     num_local_cache: int = 0

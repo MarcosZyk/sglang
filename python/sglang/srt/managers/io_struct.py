@@ -1006,6 +1006,7 @@ class BatchTokenIDOutput(
 
     # Artesia and model execution tracing
     prefill_times: Optional[List[float]] = None
+    attributed_prefill_times: Optional[List[float]] = None
     artesia_times: Optional[List[float]] = None
     decode_times: Optional[List[List[float]]] = None
     num_global_caches: Optional[List[int]] = None
@@ -1098,6 +1099,7 @@ class BatchStrOutput(
 
     # Artesia and model execution tracing
     prefill_times: Optional[List[float]] = None
+    attributed_prefill_times: Optional[List[float]] = None
     artesia_times: Optional[List[float]] = None
     decode_times: Optional[List[List[float]]] = None
     num_global_caches: Optional[List[int]] = None
