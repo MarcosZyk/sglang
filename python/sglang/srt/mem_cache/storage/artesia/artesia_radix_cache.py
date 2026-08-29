@@ -171,6 +171,7 @@ class ArtesiaRadixCache(RadixCache):
         )
         torch.cuda.synchronize()
         start_retrieve = time.perf_counter()
+        req = kwargs.get("req")
         num_retrieved = self.artesia_connector.load_kv(
             context=ContextDescription(token_ids=key.token_ids, offset=num_local_cache),
             semantics=self._semantic_description(
@@ -178,12 +179,12 @@ class ArtesiaRadixCache(RadixCache):
             ),
             kv_indices=torch.cat([local_indices, token_slots]),
             tp_description=self.tp_description,
+            call_id=(req.call_id if req is not None else None),
         )
         torch.cuda.synchronize()
         load_kv_elapsed = time.perf_counter() - start_retrieve
         self.total_load_kv_elapsed += load_kv_elapsed
 
-        req = kwargs.get("req")
         if req is not None:
             req.load_kv_elapsed += load_kv_elapsed
 
